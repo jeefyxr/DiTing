@@ -21,11 +21,11 @@ class OfflineVoice(private val root: File) {
     val modelDir = File(root, "tts-model")
 
     fun engineInstalled() = ENGINE_LIBS.keys.all { File(engineDir, it).isFile }
-    fun modelInstalled() = SherpaModel.isInstalled(modelDir)
+    fun modelInstalled() = SherpaModel.isExpectedModel(modelDir)
     fun isInstalled() = engineInstalled() && modelInstalled()
 
     fun speaker(male: Boolean, rate: Float): Speaker =
-        SherpaSpeaker(this, if (male) SherpaModel.AISHELL3_MALE else SherpaModel.AISHELL3_FEMALE, rate)
+        SherpaSpeaker(this, if (male) SherpaModel.MALE_SPEAKER else SherpaModel.FEMALE_SPEAKER, rate)
 
     /** Loads the engine into this process. Safe to call repeatedly. */
     fun load() = synchronized(LOCK) {
@@ -78,7 +78,7 @@ class OfflineVoice(private val root: File) {
         }
     }
 
-    fun installModel(input: InputStream) = SherpaModel.install(input, modelDir)
+    fun installModel(input: InputStream) = SherpaModel.install(input, modelDir, SherpaModel::isExpectedModel)
 
     /**
      * Installs whatever a user-picked file turns out to be. Returns [ENGINE] or [MODEL].
@@ -151,7 +151,7 @@ class OfflineVoice(private val root: File) {
     fun downloadEngine(transfer: Transfer, progress: Progress) =
         transfer.stream(ENGINE_URL, { bytes, _ -> progress.update(bytes, ENGINE_DOWNLOAD_BYTES) }, ::installEngine)
 
-    /** Downloads the aishell3 voice model. Blocks; run on a worker thread. */
+    /** Downloads the voice model. Blocks; run on a worker thread. */
     fun downloadModel(transfer: Transfer, progress: Progress) = transfer.stream(MODEL_URL, progress, ::installModel)
 
     companion object {
@@ -160,7 +160,7 @@ class OfflineVoice(private val root: File) {
 
         const val ENGINE_VERSION = "2.0.1"
         const val ENGINE_FILE = "sherpa-onnx-$ENGINE_VERSION.aar"
-        const val MODEL_FILE = "vits-icefall-zh-aishell3.tar.bz2"
+        const val MODEL_FILE = "sherpa-onnx-vits-zh-ll.tar.bz2"
         const val ENGINE_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$ENGINE_VERSION/$ENGINE_FILE"
         const val MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$MODEL_FILE"
         /** The arm64 libraries sit at the front of the AAR; this much of it is read to get both. */

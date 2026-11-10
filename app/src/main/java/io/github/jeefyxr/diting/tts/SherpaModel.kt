@@ -13,18 +13,24 @@ import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 
 /**
- * A sherpa-onnx VITS voice model that the user imports from a downloaded archive, e.g.
- * `vits-icefall-zh-aishell3.tar.bz2` from the sherpa-onnx "tts-models" release page.
+ * A sherpa-onnx VITS voice model unpacked from its release archive. The app uses
+ * `sherpa-onnx-vits-zh-ll.tar.bz2` from the sherpa-onnx "tts-models" release page:
+ * 16 kHz, five speakers, of which one female and one male voice are offered.
  */
 object SherpaModel {
-    /** Speakers of the aishell3 model picked by measured pitch (about 222 Hz and 127 Hz). */
-    const val AISHELL3_FEMALE = 24
-    const val AISHELL3_MALE = 136
+    /** Speakers of the zh-ll model chosen by ear (measured pitch about 225 Hz and 92 Hz). */
+    const val FEMALE_SPEAKER = 2
+    const val MALE_SPEAKER = 1
+    /** Size of zh-ll's model.onnx, used to tell it from any other VITS model. */
+    const val MODEL_BYTES = 121_100_803L
 
     private val RULE_FSTS = listOf("phone.fst", "date.fst", "number.fst", "new_heteronym.fst")
     private const val MAX_FILE = 400L * 1024 * 1024
 
     fun isInstalled(dir: File) = modelFile(dir) != null && File(dir, "tokens.txt").isFile
+
+    /** Whether [dir] holds the zh-ll model in particular, rather than just some VITS model. */
+    fun isExpectedModel(dir: File) = isInstalled(dir) && modelFile(dir)?.length() == MODEL_BYTES
 
     private fun modelFile(dir: File): File? =
         dir.listFiles()?.filter { it.name.endsWith(".onnx") }?.minByOrNull { it.name }
@@ -40,7 +46,8 @@ object SherpaModel {
                     lexicon = if (lexicon.isFile) lexicon.path else "",
                     tokens = File(dir, "tokens.txt").path,
                 ),
-                numThreads = 2,
+                // This model is the slowest part of listening; use the big cores, but not all cores.
+                numThreads = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4),
             ),
             ruleFsts = fsts,
             // One sentence per call keeps memory flat; the reader already feeds single sentences.
@@ -50,9 +57,9 @@ object SherpaModel {
 
     /**
      * Unpacks a model archive (.tar.bz2, .tar.gz or .zip) into [dest], keeping only the files the
-     * engine needs. The 180 MB `rule.far` shipped with aishell3 is skipped: the .fst files cover it.
+     * engine needs. [accept] can veto the unpacked model before it replaces the installed one.
      */
-    fun install(input: InputStream, dest: File) {
+    fun install(input: InputStream, dest: File, accept: (File) -> Boolean = { true }) {
         val tmp = File(dest.parentFile, dest.name + ".tmp")
         tmp.deleteRecursively()
         if (!tmp.mkdirs()) throw IOException("无法创建模型目录")
@@ -71,6 +78,7 @@ object SherpaModel {
                 else -> throw IOException("不支持的压缩格式（需要 .tar.bz2、.tar.gz 或 .zip）")
             }
             if (!isInstalled(tmp)) throw IOException("压缩包里没有找到 .onnx 模型和 tokens.txt")
+            if (!accept(tmp)) throw IOException("这不是所需的语音模型（需要 sherpa-onnx-vits-zh-ll）")
             dest.deleteRecursively()
             if (!tmp.renameTo(dest)) throw IOException("无法保存模型")
         } finally {

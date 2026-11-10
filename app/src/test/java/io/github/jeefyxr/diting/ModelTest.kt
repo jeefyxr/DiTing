@@ -93,19 +93,18 @@ class ModelTest {
         checkInstalled(dir)
     }
 
-    /** Runs only when DITING_MODEL_ARCHIVE points at the real vits-icefall-zh-aishell3.tar.bz2. */
-    @Test fun installsRealAishell3Archive() {
+    /** Runs only when DITING_MODEL_ARCHIVE points at the real sherpa-onnx-vits-zh-ll.tar.bz2. */
+    @Test fun installsRealModelArchive() {
         val archive = System.getenv("DITING_MODEL_ARCHIVE")?.let(::File)
         assumeTrue(archive != null && archive.isFile)
-        val dir = File(tmp.root, "model")
-        archive!!.inputStream().use { SherpaModel.install(it, dir) }
-        assertTrue(SherpaModel.isInstalled(dir))
+        val voice = OfflineVoice(tmp.root)
+        archive!!.inputStream().use { voice.installModel(it) }
+        assertTrue(voice.modelInstalled())
         assertEquals(
             setOf("model.onnx", "tokens.txt", "lexicon.txt", "phone.fst", "date.fst", "number.fst", "new_heteronym.fst"),
-            dir.list()!!.toSet(),
+            voice.modelDir.list()!!.toSet(),
         )
-        assertEquals(30482262L, File(dir, "model.onnx").length())
-        assertEquals(2042943L, File(dir, "lexicon.txt").length())
+        assertEquals(SherpaModel.MODEL_BYTES, File(voice.modelDir, "model.onnx").length())
     }
 
     private fun zipOf(vararg files: Pair<String, ByteArray>): ByteArray {
@@ -127,14 +126,20 @@ class ModelTest {
         assertFalse(File(tmp.root, "scratch").exists())
     }
 
-    @Test fun pickedFileIsRecognisedAsModel() {
+    @Test fun otherModelsAreNotAcceptedAsTheVoice() {
         val voice = OfflineVoice(tmp.root)
         val gz = ByteArrayOutputStream()
         GZIPOutputStream(gz).use { it.write(tar()) }
-        assertEquals(OfflineVoice.MODEL, voice.importFile(gz.toByteArray().inputStream(), File(tmp.root, "scratch")))
-        assertTrue(voice.modelInstalled())
-        assertFalse(voice.isInstalled())   // the engine is still missing
-        checkInstalled(voice.modelDir)
+        // A structurally valid VITS model, but not the one whose speaker numbers the app relies on.
+        val error = assertThrows(IOException::class.java) { voice.importFile(gz.toByteArray().inputStream(), File(tmp.root, "scratch")) }
+        assertTrue(error.message!!.contains("sherpa-onnx-vits-zh-ll"))
+        assertFalse(voice.modelInstalled())
+        assertFalse(voice.modelDir.exists())
+
+        // A model left over from an earlier version of the app counts as not installed.
+        SherpaModel.install(gz.toByteArray().inputStream(), voice.modelDir)
+        assertTrue(SherpaModel.isInstalled(voice.modelDir))
+        assertFalse(voice.modelInstalled())
     }
 
     /** Runs only when DITING_ENGINE_AAR points at the real sherpa-onnx-2.0.1.aar. */
@@ -174,9 +179,9 @@ class ModelTest {
         var modelTotal = 0L
         voice.downloadModel(OfflineVoice.Transfer()) { bytes, total -> modelBytes = bytes; modelTotal = total }
         assertTrue(voice.isInstalled())
-        assertEquals(31559701L, modelTotal)
-        assertEquals(30482262L, File(voice.modelDir, "model.onnx").length())
-        assertTrue(modelBytes > 31_000_000L)
+        assertEquals(118810709L, modelTotal)
+        assertEquals(SherpaModel.MODEL_BYTES, File(voice.modelDir, "model.onnx").length())
+        assertEquals(modelTotal, modelBytes)
 
         // A cancelled transfer reports cancellation and installs nothing.
         val other = OfflineVoice(tmp.newFolder("other"))

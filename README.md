@@ -18,23 +18,23 @@
 ## 离线语音
 
 离线女声 / 男声使用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Apache-2.0）和它发布的
-aishell3 多说话人 VITS 模型。引擎（约 27MB 原生库）和模型都不在安装包里，装好应用后再获取，
+zh-ll 多说话人 VITS 模型（16kHz）。引擎（约 27MB 原生库）和模型都不在安装包里，装好应用后再获取，
 所以安装包只有约 0.1MB。在阅读界面点屏幕中间 → “听” → “离线语音”，有两种方式：
 
-- **自动下载**：从 sherpa-onnx 的 GitHub 发布页下载引擎（实际传输约 12MB）和模型（约 30MB）。
+- **自动下载**：从 sherpa-onnx 的 GitHub 发布页下载引擎（实际传输约 12MB）和模型（约 113MB）。
   应用只在这一步联网。
 - **手动导入**：自己下载下面两个文件，在应用里一起选中。已经装好的那一个不用重复导入。
   - 引擎：[v2.0.1](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.1) 里的 `sherpa-onnx-2.0.1.aar`，
     或任何包含其中 arm64 的 `libonnxruntime.so` 与 `libsherpa-onnx-jni.so` 的 zip
   - 模型：[tts-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models) 里的
-    `vits-icefall-zh-aishell3.tar.bz2`
+    `sherpa-onnx-vits-zh-ll.tar.bz2`
 
 引擎是原生代码，只有 SHA-256 与 `OfflineVoice.kt` 中固定的值一致才会被安装和加载，因此只接受
 sherpa-onnx 2.0.1 的 arm64 版本。`com/k2fsa/sherpa/onnx/Tts.kt` 是该版本的 Kotlin 绑定，升级引擎时
 两处要一起更新。
 
-说明：该模型输出为 8kHz 采样率，音质不如系统语音清晰。女声、男声分别是模型里的
-24 号和 136 号说话人，是按实测基频挑选的（见 `SherpaModel.kt`）。
+女声、男声分别是模型里的 2 号和 1 号说话人（见 `SherpaModel.kt`）。这个模型比系统语音慢得多：
+在 x86 上 4 线程合成耗时约为音频时长的 0.2 倍，手机上会更高，较旧的手机可能出现句间停顿。
 
 ## 构建
 

@@ -390,7 +390,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
     private fun promptOfflineSetup() {
         val missing = listOfNotNull(
             "语音引擎（约 12MB）".takeIf { !voices.engineInstalled() },
-            "语音模型（约 30MB）".takeIf { !voices.modelInstalled() },
+            "语音模型（约 113MB）".takeIf { !voices.modelInstalled() },
         )
         AlertDialog.Builder(this, dialogTheme())
             .setTitle("离线语音")
