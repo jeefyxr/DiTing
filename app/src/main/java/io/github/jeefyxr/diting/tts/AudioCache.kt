@@ -6,9 +6,10 @@ import java.nio.ByteOrder
 import java.security.MessageDigest
 
 /**
- * Synthesized sentences kept on disk so that hearing a passage again costs nothing. Least recently
- * used clips are deleted first once the total passes [limitBytes]. Clips are 16-bit mono PCM:
- * at 16 kHz that is 32 KB per second, so 100 MB holds roughly 50 minutes of speech.
+ * A small, temporary store of synthesized sentences, so that going back a few sentences or pages
+ * costs nothing. Least recently used clips are deleted first once the total passes [limitBytes].
+ * Clips are 16-bit mono PCM: at 24 kHz that is 48 KB per second, so 10 MB holds about 3.5 minutes.
+ * Whole chapters kept for offline listening live in [SpeechLibrary] instead.
  */
 class AudioCache(private val dir: File, limitBytes: Long) {
     class Clip(val samples: ShortArray, val sampleRate: Int)
@@ -39,17 +40,7 @@ class AudioCache(private val dir: File, limitBytes: Long) {
     @Synchronized fun get(key: String): Clip? {
         if (entries[key] == null) return null   // also marks the entry as recently used
         val file = File(dir, key)
-        val clip = try {
-            val buf = ByteBuffer.wrap(file.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
-            if (buf.remaining() < HEADER || buf.int != MAGIC) null else {
-                val rate = buf.int
-                val samples = ShortArray(buf.remaining() / 2)
-                buf.asShortBuffer().get(samples)
-                if (rate in 4000..96000) Clip(samples, rate) else null
-            }
-        } catch (e: Exception) {
-            null
-        }
+        val clip = read(file)
         if (clip == null) remove(key) else file.setLastModified(System.currentTimeMillis())
         return clip
     }
@@ -58,18 +49,7 @@ class AudioCache(private val dir: File, limitBytes: Long) {
         val bytes = HEADER + clip.samples.size * 2L
         if (bytes > limitBytes) return
         remove(key)
-        try {
-            val buf = ByteBuffer.allocate(bytes.toInt()).order(ByteOrder.LITTLE_ENDIAN)
-            buf.putInt(MAGIC).putInt(clip.sampleRate)
-            buf.asShortBuffer().put(clip.samples)
-            // Write to a temporary name first so a crash never leaves a half-written clip behind.
-            val tmp = File(dir, "$key.tmp")
-            tmp.writeBytes(buf.array())
-            if (!tmp.renameTo(File(dir, key))) { tmp.delete(); return }
-        } catch (e: Exception) {
-            File(dir, "$key.tmp").delete()
-            return
-        }
+        if (!write(File(dir, key), clip)) return
         entries[key] = bytes
         total += bytes
         trim()
@@ -101,6 +81,34 @@ class AudioCache(private val dir: File, limitBytes: Long) {
     companion object {
         private const val MAGIC = 0x31414444   // "DDA1"
         private const val HEADER = 8
+
+        /** Reads a clip file; null if it is missing or damaged. */
+        fun read(file: File): Clip? = try {
+            val buf = ByteBuffer.wrap(file.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+            if (buf.remaining() < HEADER || buf.int != MAGIC) null else {
+                val rate = buf.int
+                val samples = ShortArray(buf.remaining() / 2)
+                buf.asShortBuffer().get(samples)
+                if (rate in 4000..96000) Clip(samples, rate) else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+
+        /** Writes a clip file via a temporary name, so a crash never leaves half a clip behind. */
+        fun write(file: File, clip: Clip): Boolean {
+            val tmp = File(file.parentFile, file.name + ".tmp")
+            return try {
+                val buf = ByteBuffer.allocate(HEADER + clip.samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+                buf.putInt(MAGIC).putInt(clip.sampleRate)
+                buf.asShortBuffer().put(clip.samples)
+                tmp.writeBytes(buf.array())
+                tmp.renameTo(file) || run { tmp.delete(); false }
+            } catch (e: Exception) {
+                tmp.delete()
+                false
+            }
+        }
 
         /** Cache key for one sentence spoken by one voice at one speed. */
         fun key(voice: String, speaker: Int, speed: Float, text: String): String {

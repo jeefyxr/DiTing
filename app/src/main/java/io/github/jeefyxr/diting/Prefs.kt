@@ -66,7 +66,7 @@ class Prefs(context: Context) {
         set(v) = put("autoSeconds", v.coerceIn(5, 120))
 
     var voice: Int
-        get() = int("voice", VOICE_SYSTEM, 0..3)
+        get() = int("voice", VOICE_ONLINE, 0..3)
         set(v) = put("voice", v)
 
     /** Speech rate in tenths (10 = normal). */
@@ -92,10 +92,10 @@ class Prefs(context: Context) {
         get() = sp.getString("onlineVoiceName", null).orEmpty()
         set(v) = sp.edit().putString("onlineVoiceName", v).apply()
 
-    /** Upper bound of the spoken-sentence cache in megabytes. */
+    /** Upper bound of the temporary spoken-sentence cache in megabytes. */
     var cacheMb: Int
-        get() = int("cacheMb", 100, 0..2000)
-        set(v) = put("cacheMb", v)
+        get() = int("tempCacheMb", 10, 0..2000)
+        set(v) = put("tempCacheMb", v)
 
     fun progress(bookId: String): Pair<Int, Int> {
         val s = sp.getString("pos:$bookId", null)?.split(':') ?: return 0 to 0
@@ -143,7 +143,7 @@ class Prefs(context: Context) {
         val PARAGRAPH_SPACINGS = floatArrayOf(0f, 0.3f, 0.6f, 1f)
         val MARGINS_DP = intArrayOf(14, 22, 32)
         const val NIGHT_THEME = 4
-        val CACHE_SIZES_MB = intArrayOf(50, 100, 200, 500)
+        val CACHE_SIZES_MB = intArrayOf(10, 50, 100, 200)
 
         val THEMES = listOf(
             Theme("纸张", 0xFFF3EAD7.toInt(), 0xFF3A3026.toInt(), false),

@@ -237,10 +237,11 @@ class MainActivity : Activity() {
     private fun confirmDelete(book: BookMeta) {
         AlertDialog.Builder(this, dialogTheme())
             .setTitle("删除《${book.title}》？")
-            .setMessage("书籍和阅读进度都会从本应用中移除，原文件不受影响。")
+            .setMessage("书籍、阅读进度和已下载的语音都会从本应用中移除，原文件不受影响。")
             .setPositiveButton("删除") { _, _ ->
                 store.delete(book.id)
                 prefs.clearProgress(book.id)
+                io.github.jeefyxr.diting.tts.SpeechLibrary(File(filesDir, "speech-library")).deleteBook(book.id)
                 render()
             }
             .setNegativeButton("取消", null)

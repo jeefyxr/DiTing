@@ -68,6 +68,15 @@ class OnlineVoiceTest {
         assertTrue("clip is $seconds s", seconds in 1.5f..15f)
         assertTrue("clip must not be silence", clip.samples.any { it > 1000 || it < -1000 })
 
+        // Asking for the same sentence again reuses the finished job, which is what makes an
+        // interrupted chapter download cheap to resume.
+        val first = service.fetch(voice.id, "雨停了。") { false }
+        val again = System.currentTimeMillis()
+        val second = service.fetch(voice.id, "雨停了。") { false }
+        println("online: repeat request took ${System.currentTimeMillis() - again} ms")
+        assertEquals(first.samples.size, second.samples.size)
+        assertTrue(System.currentTimeMillis() - again < 8000)
+
         // A cancelled request stops waiting and reports it as an interruption, not a failure.
         assertThrows(InterruptedException::class.java) {
             service.synthesize("这一句不需要了。", voice.id, 1.0f, "didu-test-${System.nanoTime()}") { true }

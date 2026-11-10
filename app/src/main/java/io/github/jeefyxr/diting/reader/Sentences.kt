@@ -52,5 +52,18 @@ object Sentences {
     fun resumeOffset(saved: Pair<Int, Int>?, chapter: Int, pageStart: Int, pageEnd: Int): Int? =
         saved?.takeIf { it.first == chapter && it.second >= pageStart && it.second < pageEnd }?.second
 
+    /** Every sentence of [text] that would be spoken, in order, exactly as it is passed to a voice. */
+    fun speakable(text: CharSequence): List<String> {
+        val out = ArrayList<String>()
+        var start = 0
+        while (start < text.length) {
+            val e = end(text, start)
+            val sentence = text.subSequence(start, e)
+            if (isSpeakable(sentence)) out.add(sentence.toString().trim())
+            start = e
+        }
+        return out
+    }
+
     fun isSpeakable(s: CharSequence) = s.any { it.isLetterOrDigit() }
 }

@@ -140,14 +140,21 @@ class OnlineVoice(baseUrl: String, private val token: String) {
         }
     }
 
+    /** Identifies a clip of [text] in [voiceId]. Clips are made at normal speed; speed is applied on playback. */
+    fun keyOf(voiceId: String, text: String) = AudioCache.key("online/$base/$voiceId", 0, 1f, text)
+
+    /** One sentence at normal speed. Repeating the call for the same sentence reuses the server's job. */
+    fun fetch(voiceId: String, text: String, cancelled: () -> Boolean): AudioCache.Clip =
+        synthesize(text, voiceId, 1f, "didu-" + keyOf(voiceId, text), cancelled)
+
     /** A speaker reading with [voiceId]. Several sentences are requested ahead: the server queues them. */
-    fun speaker(voiceId: String, speed: Float, cache: AudioCache): Speaker = ClipSpeaker(
+    fun speaker(voiceId: String, speed: Float, cache: AudioCache, library: (String) -> AudioCache.Clip?): Speaker = ClipSpeaker(
         cache = cache,
         lookAhead = 6,
         workers = 3,
-        keyOf = { text -> AudioCache.key("online/$base/$voiceId", 0, speed, text) },
-        synthesize = { text, cancelled ->
-            synthesize(text, voiceId, speed, "didu-" + AudioCache.key("online/$voiceId", 0, speed, text), cancelled)
-        },
+        keyOf = { text -> keyOf(voiceId, text) },
+        synthesize = { text, cancelled -> fetch(voiceId, text, cancelled) },
+        library = library,
+        playbackSpeed = speed,
     )
 }

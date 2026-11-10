@@ -25,6 +25,10 @@ class ClipSpeaker(
     private val keyOf: (text: String) -> String,
     private val synthesize: (text: String, cancelled: () -> Boolean) -> AudioCache.Clip,
     private val close: () -> Unit = {},
+    /** Clips the user downloaded for keeps; looked up before the cache and never written here. */
+    private val library: (key: String) -> AudioCache.Clip? = { null },
+    /** Speed applied while playing (pitch kept), for voices whose clips are stored at normal speed. */
+    private val playbackSpeed: Float = 1f,
 ) : Speaker {
     private val main = Handler(Looper.getMainLooper())
     private val synth = Executors.newFixedThreadPool(workers)
@@ -42,7 +46,7 @@ class ClipSpeaker(
         val gen = generation
         synth.submit(Callable {
             val key = keyOf(text)
-            cache.get(key) ?: run {
+            library(key) ?: cache.get(key) ?: run {
                 // Queued look-ahead work is pointless once the listener has moved elsewhere.
                 if (gen != generation) throw InterruptedException()
                 synthesize(text) { gen != generation }.also { cache.put(key, it) }
@@ -98,6 +102,7 @@ class ClipSpeaker(
             trackRate = clip.sampleRate
             framesWritten = 0
         }
+        if (playbackSpeed != 1f) t.playbackParams = android.media.PlaybackParams().setSpeed(playbackSpeed).setPitch(1f)
         t.play()
         write(t, clip.samples, gen)
         // A breath between sentences; without it consecutive sentences run into each other.

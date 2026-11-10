@@ -29,6 +29,8 @@ import io.github.jeefyxr.diting.Prefs
 import io.github.jeefyxr.diting.data.BookMeta
 import io.github.jeefyxr.diting.data.BookStore
 import io.github.jeefyxr.diting.tts.AudioCache
+import io.github.jeefyxr.diting.tts.ChapterDownloads
+import io.github.jeefyxr.diting.tts.SpeechLibrary
 import io.github.jeefyxr.diting.tts.OfflineVoice
 import io.github.jeefyxr.diting.tts.OnlineVoice
 import io.github.jeefyxr.diting.tts.Speaker
@@ -48,6 +50,8 @@ class ReaderActivity : Activity(), ReaderView.Source {
     private lateinit var ui: Ui
     private val voices by lazy { OfflineVoice(filesDir) }
     private val audioCache by lazy { AudioCache(File(cacheDir, "speech"), prefs.cacheMb * 1048576L) }
+    private val library by lazy { SpeechLibrary(File(filesDir, "speech-library")) }
+    private var usingFallback = false
 
     // Chrome: everything drawn over the page. Rebuilt whenever the theme or skin changes.
     private var overlay = NONE
@@ -137,8 +141,25 @@ class ReaderActivity : Activity(), ReaderView.Source {
         if (hasFocus) hideSystemBars()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Download progress arrives on worker threads; coalesce it into one refresh on the main thread.
+        ChapterDownloads.onChange = {
+            if (refreshPosted.compareAndSet(false, true)) {
+                if (::root.isInitialized) {
+                    root.postDelayed({ refreshPosted.set(false); if (overlay == LISTEN && !isDestroyed) ui.refresh() }, 300)
+                } else {
+                    refreshPosted.set(false)
+                }
+            }
+        }
+    }
+
+    private val refreshPosted = java.util.concurrent.atomic.AtomicBoolean(false)
+
     override fun onPause() {
         super.onPause()
+        ChapterDownloads.onChange = null
         if (::view.isInitialized) {
             stopAuto()
             saveProgress()
@@ -227,6 +248,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
     private fun onPageChanged(byUser: Boolean) {
         saveProgress()
         updateProgressLabel()
+        if (overlay == LISTEN) ui.refresh()   // the download row is about the chapter being shown
         if (byUser && speaking) restartSpeechHere()
     }
 
@@ -272,15 +294,26 @@ class ReaderActivity : Activity(), ReaderView.Source {
         stopAuto()
         stopSpeech()
         val rate = prefs.rateTenths / 10f
-        speaker = when {
-            onlineVoice() -> OnlineVoice(prefs.onlineUrl, prefs.onlineToken).speaker(prefs.onlineVoice, rate, audioCache)
-            offlineVoice() -> voices.speaker(prefs.voice == Prefs.VOICE_MALE, rate, audioCache)
-            else -> SystemSpeaker(this, rate)
+        usingFallback = false
+        speaker = if (onlineVoice()) {
+            // Downloaded chapters are looked up first, so they play with no network at all.
+            OnlineVoice(prefs.onlineUrl, prefs.onlineToken).speaker(prefs.onlineVoice, rate, audioCache) { key ->
+                library.get(meta.id, view.chapter, key) ?: library.get(meta.id, view.chapter + 1, key)
+            }
+        } else {
+            localSpeaker(rate)
         }
         speaking = true
         speechPos = at ?: (if (resume) resumePoint() else null) ?: view.offset
         refresh()
         speakNext()
+    }
+
+    /** The voice that needs no network: the offline one when it is installed, else the phone's own. */
+    private fun localSpeaker(rate: Float): Speaker = when {
+        voices.isInstalled() && (prefs.voice != Prefs.VOICE_SYSTEM) ->
+            voices.speaker(prefs.voice == Prefs.VOICE_MALE, rate, audioCache)
+        else -> SystemSpeaker(this, rate)
     }
 
     private fun stopSpeech() {
@@ -378,6 +411,15 @@ class ReaderActivity : Activity(), ReaderView.Source {
                     speakNext()
                 } else {
                     val reason = speaker?.lastError
+                    if (activeVoice() == Prefs.VOICE_ONLINE && !usingFallback) {
+                        // The online voice is unreachable: carry on from this sentence with a local one.
+                        usingFallback = true
+                        speaker?.release()
+                        speaker = localSpeaker(prefs.rateTenths / 10f)
+                        Toast.makeText(this, "在线语音不可用（${reason ?: "未知原因"}），已改用本机语音", Toast.LENGTH_LONG).show()
+                        speakNext()
+                        return@speak
+                    }
                     val fallback = when (activeVoice()) {
                         Prefs.VOICE_SYSTEM -> "系统语音引擎不可用或不支持中文，可改用其他语音"
                         Prefs.VOICE_ONLINE -> "在线语音合成失败"
@@ -402,6 +444,29 @@ class ReaderActivity : Activity(), ReaderView.Source {
         }
         prefs.voice = voice
         if (speaking) startSpeech(at = speechPos)
+    }
+
+    // ---- chapters kept for offline listening ---------------------------------------------
+
+    private fun onlineKey() = "${prefs.onlineUrl}|${prefs.onlineVoice}"
+
+    private fun chapterDownloaded(chapter: Int) = library.isComplete(meta.id, chapter, onlineKey())
+
+    private fun downloadChapter(chapter: Int) {
+        if (prefs.onlineToken.isEmpty() || prefs.onlineVoice.isEmpty()) {
+            promptOnlineSetup()
+            return
+        }
+        val service = OnlineVoice(prefs.onlineUrl, prefs.onlineToken)
+        val voice = prefs.onlineVoice
+        val sentences = Sentences.speakable(chapterTitle(chapter) + "\n" + chapterText(chapter))
+        ChapterDownloads.start(
+            library, meta.id, chapter, onlineKey(), sentences,
+            keyOf = { text -> service.keyOf(voice, text) },
+            // What was heard already is taken from the temporary cache instead of asking again.
+            fetch = { text, cancelled -> audioCache.get(service.keyOf(voice, text)) ?: service.fetch(voice, text, cancelled) },
+        )
+        ui.refresh()
     }
 
     /** Asks for the online service's address and token, then lets the user pick one of its voices. */
@@ -950,12 +1015,58 @@ class ReaderActivity : Activity(), ReaderView.Source {
             }
             addView(state, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(4) })
         })
+        val downloadButton = ui.button("") {
+            val chapter = view.chapter
+            val job = ChapterDownloads.job(meta.id, chapter)
+            when {
+                job != null && !job.finished -> ChapterDownloads.cancel(meta.id, chapter)
+                chapterDownloaded(chapter) -> { library.delete(meta.id, chapter); ui.refresh() }
+                else -> { ChapterDownloads.cancel(meta.id, chapter); downloadChapter(chapter) }
+            }
+        }
+        row("本章离线", LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(downloadButton)
+            val state = ui.singleLine(ui.text("", 12.5f, ui.p.faint))
+            ui.refreshers.add {
+                val chapter = view.chapter
+                val job = ChapterDownloads.job(meta.id, chapter)
+                downloadButton.text = when {
+                    job != null && !job.finished -> "取消"
+                    chapterDownloaded(chapter) -> "删除"
+                    job?.error != null -> "重试"
+                    else -> "下载本章"
+                }
+                state.text = when {
+                    job != null && !job.finished -> "正在下载 ${job.done.get()} / ${job.total} 句"
+                    chapterDownloaded(chapter) -> "已下载，可离线听"
+                    job?.error != null -> "中断：${job.error}"
+                    else -> "用在线语音合成整章并保存"
+                }
+            }
+            addView(state, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(4); marginEnd = dp(24) })
+        })
+        row("已下载", LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ui.button("清空本书") {
+                AlertDialog.Builder(this@ReaderActivity, dialogTheme())
+                    .setMessage("删除这本书所有已下载的语音？")
+                    .setPositiveButton("删除") { _, _ -> library.deleteBook(meta.id); ui.refresh() }
+                    .setNegativeButton("取消", null).show()
+            })
+            val used = ui.text("", 12.5f, ui.p.faint)
+            ui.refreshers.add {
+                val chapters = library.chapters(meta.id)
+                used.text = "${chapters.size} 章 · ${"%.1f".format(chapters.values.sum() / 1048576f)} MB"
+            }
+            addView(used, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(4) })
+        })
         run {
-            row("配音缓存", ui.chips(Prefs.CACHE_SIZES_MB.map { "${it}M" }, { Prefs.CACHE_SIZES_MB.indexOf(prefs.cacheMb) }) {
+            row("临时缓存", ui.chips(Prefs.CACHE_SIZES_MB.map { "${it}M" }, { Prefs.CACHE_SIZES_MB.indexOf(prefs.cacheMb) }) {
                 prefs.cacheMb = Prefs.CACHE_SIZES_MB[it]
                 audioCache.limitBytes = prefs.cacheMb * 1048576L
             })
-            row("已缓存", LinearLayout(this).apply {
+            row("缓存占用", LinearLayout(this).apply {
                 gravity = Gravity.CENTER_VERTICAL
                 addView(ui.button("清空") { audioCache.clear(); ui.refresh() })
                 val used = ui.text("", 12.5f, ui.p.faint)
