@@ -1,4 +1,4 @@
-# sherpa-onnx reads and writes these classes' fields from native code by name.
+# The sherpa-onnx native library reads and writes these classes' fields and methods by name.
 -keep class com.k2fsa.sherpa.onnx.** { *; }
 # commons-compress refers to optional codecs (xz, zstd, brotli, ...) that are not bundled.
 -dontwarn org.apache.commons.compress.**

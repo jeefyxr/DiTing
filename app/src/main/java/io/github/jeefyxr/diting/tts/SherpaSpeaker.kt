@@ -7,7 +7,6 @@ import android.os.Handler
 import android.os.Looper
 import com.k2fsa.sherpa.onnx.GeneratedAudio
 import com.k2fsa.sherpa.onnx.OfflineTts
-import java.io.File
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -17,7 +16,7 @@ import java.util.concurrent.Future
  * the user imported. Synthesis runs on one thread and playback on another, so the next sentence
  * is generated while the current one is still playing.
  */
-class SherpaSpeaker(private val modelDir: File, private val speakerId: Int, private val speed: Float) : Speaker {
+class SherpaSpeaker(private val voice: OfflineVoice, private val speakerId: Int, private val speed: Float) : Speaker {
     private val main = Handler(Looper.getMainLooper())
     private val synth = Executors.newSingleThreadExecutor()
     private val player = Executors.newSingleThreadExecutor()
@@ -31,7 +30,10 @@ class SherpaSpeaker(private val modelDir: File, private val speakerId: Int, priv
 
     private fun submit(text: String): Future<GeneratedAudio> = cache.getOrPut(text) {
         synth.submit(Callable {
-            val e = engine ?: OfflineTts(null, SherpaModel.config(modelDir)).also { engine = it }
+            val e = engine ?: run {
+                voice.load()
+                OfflineTts(null, SherpaModel.config(voice.modelDir)).also { engine = it }
+            }
             e.generate(text, speakerId.coerceIn(0, maxOf(0, e.numSpeakers() - 1)), speed)
         })
     }
@@ -49,7 +51,7 @@ class SherpaSpeaker(private val modelDir: File, private val speakerId: Int, priv
                 play(audio.get(), gen)
                 true
             } catch (e: Throwable) {
-                // Includes UnsatisfiedLinkError when the native library does not support this device.
+                // Includes UnsatisfiedLinkError when the engine cannot be loaded on this device.
                 false
             }
             main.post { if (gen == generation) onDone(ok) }

@@ -1,6 +1,6 @@
 # 谛读 (DiDu)
 
-一个只保留必要功能的 Android 电子书阅读器。不联网，不申请任何权限。
+一个只保留必要功能的 Android 电子书阅读器。安装包约 0.1MB；只在你主动下载离线语音时联网。
 
 ## 功能
 
@@ -18,41 +18,43 @@
 
 ## 离线语音
 
-离线朗读只在 `full` 版本中提供，使用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Apache-2.0）和它发布的
-aishell3 多说话人 VITS 模型。模型不随安装包分发，需要手动导入一次：
+离线女声 / 男声使用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Apache-2.0）和它发布的
+aishell3 多说话人 VITS 模型。引擎（约 27MB 原生库）和模型都不在安装包里，装好应用后再获取，
+所以安装包只有约 0.1MB。在阅读界面点屏幕中间 → “听” → “离线语音”，有两种方式：
 
-1. 从 <https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models> 下载
-   `vits-icefall-zh-aishell3.tar.bz2`（约 32MB）
-2. 阅读界面点屏幕中间 → “听” → “导入模型” → 选择该文件
-3. 在“语音”一行选择“女声”或“男声”
+- **自动下载**：从 sherpa-onnx 的 GitHub 发布页下载引擎（实际传输约 12MB）和模型（约 30MB）。
+  应用只在这一步联网。
+- **手动导入**：自己下载下面两个文件，在应用里一起选中。已经装好的那一个不用重复导入。
+  - 引擎：[v2.0.1](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.1) 里的 `sherpa-onnx-2.0.1.aar`，
+    或任何包含其中 arm64 的 `libonnxruntime.so` 与 `libsherpa-onnx-jni.so` 的 zip
+  - 模型：[tts-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models) 里的
+    `vits-icefall-zh-aishell3.tar.bz2`
+
+引擎是原生代码，只有 SHA-256 与 `OfflineVoice.kt` 中固定的值一致才会被安装和加载，因此只接受
+sherpa-onnx 2.0.1 的 arm64 版本。`com/k2fsa/sherpa/onnx/Tts.kt` 是该版本的 Kotlin 绑定，升级引擎时
+两处要一起更新。
 
 说明：该模型输出为 8kHz 采样率，音质不如系统语音清晰。女声、男声分别是模型里的
 24 号和 136 号说话人，是按实测基频挑选的（见 `SherpaModel.kt`）。
 
 ## 构建
 
-需要 JDK 17+ 和 Android SDK（platform 36、build-tools 36.0.0）。有两个版本：
-
-| 版本 | 安装包 | 朗读 |
-| --- | --- | --- |
-| `lite` | 约 0.1 MB | 只用手机系统自带的语音引擎 |
-| `full` | 约 10 MB | 另外内置离线语音引擎（sherpa-onnx），可导入模型使用女声 / 男声 |
-
-`full` 的体积几乎全部来自离线语音引擎的原生库（onnxruntime）。
+需要 JDK 17+ 和 Android SDK（platform 36、build-tools 36.0.0）。
 
 ```bash
-./gradlew assembleLiteRelease assembleFullRelease
+./gradlew assembleRelease
 ```
 
 ```bash
-./gradlew testFullDebugUnitTest
+./gradlew testDebugUnitTest
 ```
 
-APK 输出在 `app/build/outputs/apk/<版本>/release/`，只包含 arm64-v8a。release 版本开启了代码压缩，
+APK 输出在 `app/build/outputs/apk/release/app-release.apk`。release 版本开启了代码压缩，
 并暂时用调试密钥签名以便直接安装；正式发布前请换成自己的签名。
 
 测试包含对真实界面的渲染测试（Robolectric）。`GalleryTest` 会把每个页面在两套风格、明暗两种配色下
 渲染到 `app/build/gallery/`；设置环境变量 `DITING_SAMPLE_EPUB` 可以用一本真实的 EPUB 作为内容。
+设置 `DITING_NETWORK_TEST=1` 会真实执行一次离线语音的自动下载。
 
 ## 已知限制
 

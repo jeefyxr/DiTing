@@ -44,7 +44,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
     private lateinit var view: ReaderView
     private lateinit var root: FrameLayout
     private lateinit var ui: Ui
-    private val modelDir by lazy { File(filesDir, "tts-model") }
+    private val voices by lazy { OfflineVoice(filesDir) }
 
     // Chrome: everything drawn over the page. Rebuilt whenever the theme or skin changes.
     private var overlay = NONE
@@ -255,7 +255,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
 
     // ---- speech ---------------------------------------------------------------------------
 
-    private fun offlineVoice() = prefs.voice != Prefs.VOICE_SYSTEM && OfflineVoice.isInstalled(modelDir)
+    private fun offlineVoice() = prefs.voice != Prefs.VOICE_SYSTEM && voices.isInstalled()
 
     /**
      * Starts reading aloud: from [at] if given, else (with [resume]) from where listening last
@@ -266,7 +266,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
         stopSpeech()
         val rate = prefs.rateTenths / 10f
         speaker = if (offlineVoice()) {
-            OfflineVoice.speaker(modelDir, prefs.voice == Prefs.VOICE_MALE, rate)
+            voices.speaker(prefs.voice == Prefs.VOICE_MALE, rate)
         } else {
             SystemSpeaker(this, rate)
         }
@@ -375,8 +375,8 @@ class ReaderActivity : Activity(), ReaderView.Source {
     }
 
     private fun chooseVoice(voice: Int) {
-        if (voice != Prefs.VOICE_SYSTEM && !OfflineVoice.isInstalled(modelDir)) {
-            promptModelImport()
+        if (voice != Prefs.VOICE_SYSTEM && !voices.isInstalled()) {
+            promptOfflineSetup()
             return
         }
         prefs.voice = voice
@@ -386,17 +386,37 @@ class ReaderActivity : Activity(), ReaderView.Source {
     private fun dialogTheme() =
         if (ui.p.night) android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert
 
-    private fun promptModelImport() {
+    /** Offers the two ways of getting the offline engine and voice model onto the phone. */
+    private fun promptOfflineSetup() {
+        val missing = listOfNotNull(
+            "语音引擎（约 12MB）".takeIf { !voices.engineInstalled() },
+            "语音模型（约 30MB）".takeIf { !voices.modelInstalled() },
+        )
         AlertDialog.Builder(this, dialogTheme())
-            .setTitle("导入离线语音模型")
+            .setTitle("离线语音")
             .setMessage(
-                "离线男声/女声使用 sherpa-onnx 的 aishell3 模型。\n\n" +
-                    "1. 在浏览器打开 github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models\n" +
-                    "2. 下载 vits-icefall-zh-aishell3.tar.bz2（约 32MB）\n" +
-                    "3. 点“选择文件”并选中它"
+                if (missing.isEmpty()) "离线语音已经装好。需要的话可以重新下载或重新导入。"
+                else "女声、男声需要先装好：${missing.joinToString("、")}。\n\n" +
+                    "自动下载会从 GitHub 获取，只在这一步联网。网络不通时可以改用手动导入。"
+            )
+            .setPositiveButton("自动下载") { _, _ -> downloadOffline(force = missing.isEmpty()) }
+            .setNeutralButton("手动导入") { _, _ -> promptManualImport() }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun promptManualImport() {
+        AlertDialog.Builder(this, dialogTheme())
+            .setTitle("手动导入")
+            .setMessage(
+                "用浏览器从 github.com/k2-fsa/sherpa-onnx/releases 下载这两个文件，然后在下一步一起选中：\n\n" +
+                    "引擎：v${OfflineVoice.ENGINE_VERSION} 版本里的 ${OfflineVoice.ENGINE_FILE}\n\n" +
+                    "模型：tts-models 版本里的 ${OfflineVoice.MODEL_FILE}\n\n" +
+                    "已经装好的那一个不用重复导入。"
             )
             .setPositiveButton("选择文件") { _, _ ->
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                 @Suppress("DEPRECATION")
                 startActivityForResult(intent, REQUEST_MODEL)
             }
@@ -404,27 +424,79 @@ class ReaderActivity : Activity(), ReaderView.Source {
             .show()
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        val uri = data?.data
-        if (requestCode != REQUEST_MODEL || resultCode != RESULT_OK || uri == null) return
+    /** Runs [work] off the main thread behind a progress dialog; [work] returns an error or null. */
+    private fun offlineJob(title: String, onCancel: (() -> Unit)?, work: (status: (String) -> Unit) -> String?) {
         stopSpeech()
-        val dialog = AlertDialog.Builder(this, dialogTheme()).setMessage("正在导入模型，请稍候…").setCancelable(false).show()
+        val builder = AlertDialog.Builder(this, dialogTheme()).setTitle(title).setMessage("正在准备…").setCancelable(false)
+        if (onCancel != null) builder.setNegativeButton("取消") { _, _ -> onCancel() }
+        val dialog = builder.show()
+        var last = 0L
+        val status = { text: String ->
+            val now = android.os.SystemClock.uptimeMillis()
+            if (now - last > 200) {
+                last = now
+                runOnUiThread { if (dialog.isShowing) dialog.setMessage(text) }
+            }
+        }
         thread {
             val error = try {
-                (contentResolver.openInputStream(uri) ?: throw java.io.IOException("无法读取文件")).use {
-                    OfflineVoice.install(it, modelDir)
-                }
-                null
+                work(status)
             } catch (e: Exception) {
-                e.message ?: "导入失败"
+                e.message ?: "操作失败"
+            } catch (e: Throwable) {
+                "操作失败：${e.javaClass.simpleName}"
             }
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
-                dialog.dismiss()
-                toast(error ?: "模型已导入，可以选择女声或男声")
+                if (dialog.isShowing) dialog.dismiss()
+                if (error == null) {
+                    toast(if (voices.isInstalled()) "离线语音已就绪，可以选择女声或男声" else "已导入，还缺${if (voices.engineInstalled()) "语音模型" else "语音引擎"}")
+                } else if (error != "已取消") {
+                    AlertDialog.Builder(this, dialogTheme()).setTitle("没有完成").setMessage(error)
+                        .setPositiveButton("手动导入") { _, _ -> promptManualImport() }
+                        .setNegativeButton("关闭", null).show()
+                }
                 buildChrome()
             }
+        }
+    }
+
+    private fun downloadOffline(force: Boolean) {
+        val transfer = OfflineVoice.Transfer()
+        fun mb(bytes: Long) = "%.1f".format(bytes / 1048576f)
+        offlineJob("下载离线语音", { transfer.cancel() }) { status ->
+            if (force || !voices.engineInstalled()) {
+                voices.downloadEngine(transfer) { bytes, total -> status("语音引擎  ${mb(minOf(bytes, total))} / ${mb(total)} MB") }
+            }
+            if (!transfer.cancelled && (force || !voices.modelInstalled())) {
+                voices.downloadModel(transfer) { bytes, total ->
+                    status(if (total > 0) "语音模型  ${mb(bytes)} / ${mb(total)} MB" else "语音模型  ${mb(bytes)} MB")
+                }
+            }
+            if (transfer.cancelled) "已取消" else null
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != REQUEST_MODEL || resultCode != RESULT_OK || data == null) return
+        val uris = ArrayList<android.net.Uri>()
+        data.clipData?.let { clip -> for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri) }
+        if (uris.isEmpty()) data.data?.let(uris::add)
+        if (uris.isEmpty()) return
+        offlineJob("导入离线语音", null) { status ->
+            val errors = ArrayList<String>()
+            uris.forEachIndexed { i, uri ->
+                status("正在导入第 ${i + 1} 个文件，共 ${uris.size} 个…")
+                try {
+                    (contentResolver.openInputStream(uri) ?: throw java.io.IOException("无法读取文件")).use {
+                        voices.importFile(it, File(cacheDir, "offline-import.tmp"))
+                    }
+                } catch (e: Exception) {
+                    errors.add(e.message ?: "导入失败")
+                }
+            }
+            errors.takeIf { it.isNotEmpty() }?.joinToString("\n")
         }
     }
 
@@ -749,7 +821,8 @@ class ReaderActivity : Activity(), ReaderView.Source {
             r.addView(control, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
             col.addView(r)
         }
-        if (OfflineVoice.AVAILABLE) {
+        val offlineSupported = OfflineVoice.supported(Build.SUPPORTED_ABIS)
+        if (offlineSupported) {
             row("语音", ui.chips(listOf("系统", "女声", "男声"), { if (offlineVoice()) prefs.voice else Prefs.VOICE_SYSTEM }) { chooseVoice(it) })
         }
         val rate = LinearLayout(this)
@@ -764,11 +837,18 @@ class ReaderActivity : Activity(), ReaderView.Source {
         ui.refreshers.add { rateValue.text = "${"%.1f".format(prefs.rateTenths / 10f)}×" }
         rate.addView(rateValue, LinearLayout.LayoutParams(dp(56), WRAP_CONTENT).apply { marginEnd = dp(24) })
         row("语速", rate)
-        if (OfflineVoice.AVAILABLE) row("离线模型", LinearLayout(this).apply {
+        if (offlineSupported) row("离线语音", LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            addView(ui.button(if (OfflineVoice.isInstalled(modelDir)) "重新导入" else "导入模型") { promptModelImport() })
+            addView(ui.button(if (voices.isInstalled()) "管理" else "获取") { promptOfflineSetup() })
             val state = ui.text("", 12.5f, ui.p.faint)
-            ui.refreshers.add { state.text = if (OfflineVoice.isInstalled(modelDir)) "已导入" else "女声、男声需要它" }
+            ui.refreshers.add {
+                state.text = when {
+                    voices.isInstalled() -> "已就绪"
+                    voices.engineInstalled() -> "还缺语音模型"
+                    voices.modelInstalled() -> "还缺语音引擎"
+                    else -> "女声、男声需要先下载或导入"
+                }
+            }
             addView(state, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(4) })
         })
         sheet.addView(col)

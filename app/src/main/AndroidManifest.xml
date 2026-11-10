@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Needed on Android 11+ to find the phone's text-to-speech engine. No permissions are used. -->
+    <!-- Used for one thing only: downloading the optional offline voice when the user asks for it. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Needed on Android 11+ to find the phone's text-to-speech engine. -->
     <queries>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
