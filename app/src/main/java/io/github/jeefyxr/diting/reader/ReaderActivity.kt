@@ -551,7 +551,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
     private fun buildChrome() {
         val scrollY = settingsScroll?.scrollY ?: 0
         listOf(scrimHolder, topBar, bottomBar, settingsSheet, tocSheet, listenSheet).forEach { it?.let(root::removeView) }
-        ui = Ui(this, palette(), prefs.softUi)
+        ui = Ui(this, palette())
 
         // A full-screen catcher: any tap outside the chrome closes it. Dimmed behind sheets.
         val catcher = FrameLayout(this)
@@ -739,9 +739,6 @@ class ReaderActivity : Activity(), ReaderView.Source {
             }
         }
         row("背景", ui.spread(swatches).apply { setPadding(0, 0, dp(18), 0) }, 88)
-        row("界面", ui.chips(listOf("Material", "Soft"), { if (prefs.softUi) 1 else 0 }) {
-            if (prefs.softUi != (it == 1)) { prefs.softUi = it == 1; buildChrome() }
-        })
 
         section("翻页")
         row("动画", ui.chips(listOf("平移", "覆盖", "上下", "无"), { prefs.turnMode }) { prefs.turnMode = it; restyle() })

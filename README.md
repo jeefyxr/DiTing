@@ -14,7 +14,6 @@
 - 听书：菜单第五项“听”打开听书面板（播放 / 暂停、上一句 / 下一句、语音、语速）；
   阅读时双击任意一段从那里开始听；听到的位置单独记忆，下次从“听”进入会接着上次继续。
   默认使用手机系统自带的语音引擎，也可导入离线语音模型，使用内置的女声 / 男声
-- 两套界面风格可在设置里切换：Material 与 Soft
 
 ## 离线语音
 
@@ -52,7 +51,7 @@ sherpa-onnx 2.0.1 的 arm64 版本。`com/k2fsa/sherpa/onnx/Tts.kt` 是该版本
 APK 输出在 `app/build/outputs/apk/release/app-release.apk`。release 版本开启了代码压缩，
 并暂时用调试密钥签名以便直接安装；正式发布前请换成自己的签名。
 
-测试包含对真实界面的渲染测试（Robolectric）。`GalleryTest` 会把每个页面在两套风格、明暗两种配色下
+测试包含对真实界面的渲染测试（Robolectric）。`GalleryTest` 会把每个页面在明暗两种配色下
 渲染到 `app/build/gallery/`；设置环境变量 `DITING_SAMPLE_EPUB` 可以用一本真实的 EPUB 作为内容。
 设置 `DITING_NETWORK_TEST=1` 会真实执行一次离线语音的自动下载。
 

@@ -25,7 +25,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * Renders every screen in both skins to build/gallery so the look can be reviewed without a device.
+ * Renders every screen in a light and a dark theme to build/gallery so the look can be reviewed without a device.
  * Set DITING_SAMPLE_EPUB to use a real book.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -81,11 +81,10 @@ class GalleryTest {
         val prefs = Prefs(app)
         prefs.saveProgress(book.id, minOf(17, book.chapters.size - 1), 0, 0.02f)
 
-        for ((skin, soft) in listOf("material" to false, "soft" to true)) {
+        run {
             for ((tone, theme) in listOf("light" to 0, "dark" to Prefs.NIGHT_THEME)) {
-                prefs.softUi = soft
                 prefs.theme = theme
-                val name = "$skin-$tone"
+                val name = tone
 
                 val shelf = Robolectric.buildActivity(MainActivity::class.java).setup().get()
                 shot(shelf, "$name-1-shelf")

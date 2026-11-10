@@ -43,11 +43,6 @@ class Prefs(context: Context) {
         get() = int("turnMode", TURN_COVER, 0..3)
         set(v) = put("turnMode", v)
 
-    /** Interface skin: false = Material, true = Soft UI. */
-    var softUi: Boolean
-        get() = sp.getBoolean("softUi", false)
-        set(v) = put("softUi", v)
-
     var serif: Boolean
         get() = sp.getBoolean("serif", false)
         set(v) = put("serif", v)

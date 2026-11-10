@@ -32,12 +32,9 @@ import android.widget.TextView
 /** Every interface colour is derived from one background/text pair, so the chrome always matches the page. */
 class Palette(val background: Int, val text: Int) {
     val night = luminance(background) < 0.3f
-    /** Material sheets and bars: one tonal step away from the page. */
-    val surface = if (night) blend(background, Color.WHITE, 0.07f) else blend(background, Color.WHITE, 0.6f)
     val muted = withAlpha(text, 0.6f)
     val faint = withAlpha(text, 0.36f)
     val outline = withAlpha(text, 0.16f)
-    val fill = withAlpha(text, 0.07f)
     val accent = if (night) 0xFFD08573.toInt() else 0xFFB4553D.toInt()
     val onAccent = if (night) 0xFF1E1410.toInt() else Color.WHITE
 
@@ -194,21 +191,21 @@ class SoftDrawable(
 }
 
 /**
- * Builders for the controls the app uses. Two skins share one layout:
- * Material (flat tonal surfaces, outlined and filled shapes) and Soft (raised and pressed shapes).
+ * Builders for the controls the app uses, in a "soft UI" style: everything shares the page's
+ * colour, and controls are told apart by being raised from it or pressed into it.
  */
-class Ui(val context: Context, val p: Palette, val soft: Boolean) {
+class Ui(val context: Context, val p: Palette) {
     private val density = context.resources.displayMetrics.density
     /** Callbacks that re-read state into the controls; run them with [refresh]. */
     val refreshers = ArrayList<() -> Unit>()
 
     /** Colour of sheets, bars and cards. Soft shapes must share the colour of what they sit on. */
-    val surface = if (soft) p.background else p.surface
+    val surface = p.background
     private val softLight = Palette.blend(p.background, Color.WHITE, if (p.night) 0.13f else 0.95f)
     private val softDark = Palette.blend(p.background, Color.BLACK, if (p.night) 0.6f else 0.17f)
-    /** Room inside a soft control's bounds for its shadows; zero for Material. */
-    val pad = if (soft) dp(5) else 0
-    private val chipRadius = if (soft) 100f else 10f
+    /** Room inside a control's bounds for its shadows. */
+    val pad = dp(5)
+    private val chipRadius = 100f
 
     fun refresh() = refreshers.forEach { it() }
 
@@ -229,7 +226,7 @@ class Ui(val context: Context, val p: Palette, val soft: Boolean) {
 
     /** Shadow layers and blurs need a software layer before Android 9. */
     fun <T : View> softLayer(view: T): T = view.apply {
-        if (soft && Build.VERSION.SDK_INT < 28) setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+        if (Build.VERSION.SDK_INT < 28) setLayerType(View.LAYER_TYPE_SOFTWARE, null)
     }
 
     /** [content] with a touch ripple clipped to a rounded shape. */
@@ -239,7 +236,7 @@ class Ui(val context: Context, val p: Palette, val soft: Boolean) {
     }
 
     /** A card or panel background. */
-    fun card(radiusDp: Float): Drawable = if (soft) raised(radiusDp, dp(7)) else shape(p.surface, radiusDp)
+    fun card(radiusDp: Float): Drawable = raised(radiusDp, dp(7))
 
     /** Background of a bottom sheet: only the top corners are rounded. */
     fun sheet(): Drawable = GradientDrawable().apply {
@@ -261,7 +258,7 @@ class Ui(val context: Context, val p: Palette, val soft: Boolean) {
         ellipsize = TextUtils.TruncateAt.END
     }
 
-    fun hairline() = View(context).apply { setBackgroundColor(if (soft) Palette.withAlpha(p.text, 0.07f) else p.outline) }
+    fun hairline() = View(context).apply { setBackgroundColor(Palette.withAlpha(p.text, 0.07f)) }
 
     fun iconDrawable(kind: Int, color: Int = p.text, sizeDp: Int = 24) = IconDrawable(kind, color, dp(sizeDp))
 
@@ -282,17 +279,16 @@ class Ui(val context: Context, val p: Palette, val soft: Boolean) {
         val image = softLayer(ImageView(context))
         image.scaleType = ImageView.ScaleType.CENTER
         val caption = text("", 11.5f, p.muted)
-        val box = if (soft) dp(52) else dp(40)
+        val box = dp(52)
         col.addView(image, LinearLayout.LayoutParams(box, box))
-        col.addView(caption, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { topMargin = dp(if (soft) 2 else 0) })
+        col.addView(caption, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { topMargin = dp(2) })
         col.setPadding(0, dp(6), 0, dp(6))
         col.setOnClickListener { onClick() }
-        if (!soft) col.background = pressable(null, 16f)
         refreshers.add {
             val on = active()
             val color = if (on) p.accent else p.text
             image.setImageDrawable(iconDrawable(kind(), color, 22))
-            if (soft) image.background = if (on) sunken(100f) else raised(100f)
+            image.background = if (on) sunken(100f) else raised(100f)
             caption.text = label()
             caption.setTextColor(if (on) p.accent else p.muted)
         }
@@ -306,13 +302,8 @@ class Ui(val context: Context, val p: Palette, val soft: Boolean) {
         b.setOnClickListener { onClick() }
         b.layoutParams = LinearLayout.LayoutParams(dp(72), dp(72))
         refreshers.add {
-            if (soft) {
-                b.background = raised(100f, dp(6))
-                b.setImageDrawable(iconDrawable(kind(), p.accent, 30))
-            } else {
-                b.background = pressable(shape(p.accent, 100f))
-                b.setImageDrawable(iconDrawable(kind(), p.onAccent, 30))
-            }
+            b.background = raised(100f, dp(6))
+            b.setImageDrawable(iconDrawable(kind(), p.accent, 30))
         }
         return b
     }
@@ -329,11 +320,7 @@ class Ui(val context: Context, val p: Palette, val soft: Boolean) {
     private fun styleChip(c: TextView, on: Boolean) {
         c.setTextColor(if (on) p.accent else p.text)
         c.typeface = if (on) MEDIUM else Typeface.DEFAULT
-        c.background = when {
-            soft -> if (on) sunken(chipRadius) else raised(chipRadius)
-            on -> pressable(shape(Palette.withAlpha(p.accent, 0.16f), chipRadius, p.accent, 1.2f), chipRadius)
-            else -> pressable(shape(Color.TRANSPARENT, chipRadius, p.outline, 1f), chipRadius)
-        }
+        c.background = if (on) sunken(chipRadius) else raised(chipRadius)
     }
 
     private fun scroller(row: LinearLayout) = HorizontalScrollView(context).apply {
@@ -385,8 +372,8 @@ class Ui(val context: Context, val p: Palette, val soft: Boolean) {
         val b = text(label, 15f, p.onAccent, medium = true)
         b.gravity = Gravity.CENTER
         b.setPadding(dp(28), 0, dp(28), 0)
-        b.background = pressable(shape(p.accent, if (soft) 100f else 14f), if (soft) 100f else 14f)
-        if (soft) b.elevation = dpf(6f)
+        b.background = pressable(shape(p.accent, 100f), 100f)
+        b.elevation = dpf(6f)
         b.setOnClickListener { onClick() }
         b.layoutParams = LinearLayout.LayoutParams(WRAP_CONTENT, dp(48))
         return b
@@ -398,27 +385,23 @@ class Ui(val context: Context, val p: Palette, val soft: Boolean) {
     fun slider(max: Int, value: () -> Int, onChange: (value: Int, done: Boolean) -> Unit): SeekBar {
         val seek = softLayer(SeekBar(context))
         seek.max = max
-        val trackHeight = if (soft) dp(10) else dp(4)
-        val track = if (soft) sunken(100f, 0) else shape(p.outline, 100f)
+        val trackHeight = dp(10)
+        val track = sunken(100f, 0)
         val fill = ClipDrawable(shape(p.accent, 100f), Gravity.START, ClipDrawable.HORIZONTAL)
         val layers = LayerDrawable(arrayOf(track, fill))
         layers.setId(0, android.R.id.background)
         layers.setId(1, android.R.id.progress)
         for (i in 0..1) {
-            layers.setLayerHeight(i, if (soft && i == 1) dp(4) else trackHeight)
+            layers.setLayerHeight(i, if (i == 1) dp(4) else trackHeight)
             layers.setLayerGravity(i, Gravity.CENTER_VERTICAL)
         }
-        if (soft) layers.setLayerInset(1, dp(3), 0, dp(3), 0)
+        layers.setLayerInset(1, dp(3), 0, dp(3), 0)
         seek.progressDrawable = layers
-        val thumbSize = if (soft) dp(30) else dp(20)
-        seek.thumb = if (soft) {
-            LayerDrawable(arrayOf(raised(100f, dp(4)), shape(p.accent, 100f))).apply {
-                setLayerSize(0, thumbSize, thumbSize)
-                setLayerSize(1, dp(8), dp(8))
-                setLayerGravity(1, Gravity.CENTER)
-            }
-        } else {
-            shape(p.accent, 100f).apply { setSize(thumbSize, thumbSize) }
+        val thumbSize = dp(30)
+        seek.thumb = LayerDrawable(arrayOf(raised(100f, dp(4)), shape(p.accent, 100f))).apply {
+            setLayerSize(0, thumbSize, thumbSize)
+            setLayerSize(1, dp(8), dp(8))
+            setLayerGravity(1, Gravity.CENTER)
         }
         seek.thumbOffset = thumbSize / 2
         seek.splitTrack = false
@@ -525,29 +508,12 @@ class ToggleView(private val ui: Ui) : View(ui.context) {
         val travel = rect.width() - h
         val cx = rect.left + h / 2 + travel * position
         val cy = rect.centerY()
-        if (ui.soft) {
-            track.setBounds(0, 0, width, height)
-            track.draw(canvas)
-            paint.style = Paint.Style.FILL
-            paint.color = Palette.withAlpha(p.accent, 0.55f * position)
-            canvas.drawRoundRect(rect, h / 2, h / 2, paint)
-            drawKnob(canvas, cx, cy, h / 2 - ui.dpf(3f))
-        } else {
-            paint.style = Paint.Style.FILL
-            paint.color = Palette.blend(Palette.blend(p.background, p.text, 0.12f), p.accent, position)
-            canvas.drawRoundRect(rect, h / 2, h / 2, paint)
-            if (position < 1f) {
-                paint.style = Paint.Style.STROKE
-                paint.strokeWidth = ui.dpf(1.6f)
-                paint.color = Palette.withAlpha(p.text, 0.38f * (1 - position))
-                val half = paint.strokeWidth / 2
-                rect.inset(half, half)
-                canvas.drawRoundRect(rect, h / 2, h / 2, paint)
-            }
-            paint.style = Paint.Style.FILL
-            paint.color = Palette.blend(Palette.withAlpha(p.text, 1f).let { Palette.blend(p.background, it, 0.55f) }, p.onAccent, position)
-            canvas.drawCircle(cx, cy, ui.dpf(8f) + ui.dpf(4f) * position, paint)
-        }
+        track.setBounds(0, 0, width, height)
+        track.draw(canvas)
+        paint.style = Paint.Style.FILL
+        paint.color = Palette.withAlpha(p.accent, 0.55f * position)
+        canvas.drawRoundRect(rect, h / 2, h / 2, paint)
+        drawKnob(canvas, cx, cy, h / 2 - ui.dpf(3f))
     }
 
     private fun drawKnob(canvas: Canvas, cx: Float, cy: Float, r: Float) {
@@ -575,18 +541,11 @@ class SwatchView(private val ui: Ui, private val fillColor: Int, private val tex
         val r = minOf(ui.dpf(19f), width / 2f - ui.dpf(6.5f))
         paint.style = Paint.Style.FILL
         paint.color = fillColor
-        if (ui.soft) {
-            ui.softShadow(paint, false); canvas.drawCircle(cx, cy, r, paint)
-            ui.softShadow(paint, true); canvas.drawCircle(cx, cy, r, paint)
-            paint.clearShadowLayer()
-        }
+        ui.softShadow(paint, false); canvas.drawCircle(cx, cy, r, paint)
+        ui.softShadow(paint, true); canvas.drawCircle(cx, cy, r, paint)
+        paint.clearShadowLayer()
         canvas.drawCircle(cx, cy, r, paint)
         paint.style = Paint.Style.STROKE
-        if (!ui.soft) {
-            paint.strokeWidth = ui.dpf(1f)
-            paint.color = ui.p.outline
-            canvas.drawCircle(cx, cy, r - paint.strokeWidth / 2, paint)
-        }
         if (chosen) {
             paint.strokeWidth = ui.dpf(2f)
             paint.color = ui.p.accent

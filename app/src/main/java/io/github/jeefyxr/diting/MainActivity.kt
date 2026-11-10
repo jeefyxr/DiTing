@@ -51,7 +51,7 @@ class MainActivity : Activity() {
 
     private fun render() {
         val theme = Prefs.THEMES[prefs.theme]
-        ui = Ui(this, Palette(theme.background, theme.text), prefs.softUi)
+        ui = Ui(this, Palette(theme.background, theme.text))
         val p = ui.p
         window.decorView.setBackgroundColor(p.background)
         if (Build.VERSION.SDK_INT >= 30) {
@@ -87,7 +87,7 @@ class MainActivity : Activity() {
         )
         header.addView(titles, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         val add = ui.softLayer(ui.icon(IconDrawable.PLUS) { pickFiles() })
-        if (ui.soft) add.background = ui.raised(100f) else add.background = ui.pressable(ui.shape(p.fill, 100f))
+        add.background = ui.raised(100f)
         header.addView(add, LinearLayout.LayoutParams(dp(48) + 2 * ui.pad, dp(48) + 2 * ui.pad).apply { marginEnd = -ui.pad })
         col.addView(header)
 
@@ -97,8 +97,8 @@ class MainActivity : Activity() {
             books.maxByOrNull { prefs.lastRead(it.id) }?.takeIf { prefs.lastRead(it.id) > 0 }?.let { recent ->
                 col.addView(continueCard(recent), LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
                     topMargin = dp(28) - ui.pad
-                    marginStart = -dp(if (ui.soft) 7 else 0)
-                    marginEnd = -dp(if (ui.soft) 7 else 0)
+                    marginStart = -dp(7)
+                    marginEnd = -dp(7)
                 })
             }
             val columns = 3
@@ -143,7 +143,7 @@ class MainActivity : Activity() {
 
     private fun continueCard(book: BookMeta): View {
         val p = ui.p
-        val inner = if (ui.soft) dp(7) else 0
+        val inner = dp(7)
         val card = ui.softLayer(LinearLayout(this))
         card.gravity = Gravity.CENTER_VERTICAL
         card.background = ui.card(22f)
