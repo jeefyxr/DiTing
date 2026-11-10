@@ -18,7 +18,7 @@
 
 ## 离线语音
 
-离线朗读使用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Apache-2.0）和它发布的
+离线朗读只在 `full` 版本中提供，使用 [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Apache-2.0）和它发布的
 aishell3 多说话人 VITS 模型。模型不随安装包分发，需要手动导入一次：
 
 1. 从 <https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models> 下载
@@ -31,17 +31,25 @@ aishell3 多说话人 VITS 模型。模型不随安装包分发，需要手动�
 
 ## 构建
 
-需要 JDK 17+ 和 Android SDK（platform 36、build-tools 36.0.0）。
+需要 JDK 17+ 和 Android SDK（platform 36、build-tools 36.0.0）。有两个版本：
+
+| 版本 | 安装包 | 朗读 |
+| --- | --- | --- |
+| `lite` | 约 0.1 MB | 只用手机系统自带的语音引擎 |
+| `full` | 约 10 MB | 另外内置离线语音引擎（sherpa-onnx），可导入模型使用女声 / 男声 |
+
+`full` 的体积几乎全部来自离线语音引擎的原生库（onnxruntime）。
 
 ```bash
-./gradlew assembleDebug
+./gradlew assembleLiteRelease assembleFullRelease
 ```
 
 ```bash
-./gradlew testDebugUnitTest
+./gradlew testFullDebugUnitTest
 ```
 
-APK 输出在 `app/build/outputs/apk/debug/app-debug.apk`。安装包只包含 arm64-v8a 的原生库。
+APK 输出在 `app/build/outputs/apk/<版本>/release/`，只包含 arm64-v8a。release 版本开启了代码压缩，
+并暂时用调试密钥签名以便直接安装；正式发布前请换成自己的签名。
 
 测试包含对真实界面的渲染测试（Robolectric）。`GalleryTest` 会把每个页面在两套风格、明暗两种配色下
 渲染到 `app/build/gallery/`；设置环境变量 `DITING_SAMPLE_EPUB` 可以用一本真实的 EPUB 作为内容。

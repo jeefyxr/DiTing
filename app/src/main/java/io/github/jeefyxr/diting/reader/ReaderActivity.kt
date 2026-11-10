@@ -28,8 +28,7 @@ import android.widget.Toast
 import io.github.jeefyxr.diting.Prefs
 import io.github.jeefyxr.diting.data.BookMeta
 import io.github.jeefyxr.diting.data.BookStore
-import io.github.jeefyxr.diting.tts.SherpaModel
-import io.github.jeefyxr.diting.tts.SherpaSpeaker
+import io.github.jeefyxr.diting.tts.OfflineVoice
 import io.github.jeefyxr.diting.tts.Speaker
 import io.github.jeefyxr.diting.tts.SystemSpeaker
 import io.github.jeefyxr.diting.ui.IconDrawable
@@ -256,7 +255,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
 
     // ---- speech ---------------------------------------------------------------------------
 
-    private fun offlineVoice() = prefs.voice != Prefs.VOICE_SYSTEM && SherpaModel.isInstalled(modelDir)
+    private fun offlineVoice() = prefs.voice != Prefs.VOICE_SYSTEM && OfflineVoice.isInstalled(modelDir)
 
     /**
      * Starts reading aloud: from [at] if given, else (with [resume]) from where listening last
@@ -267,8 +266,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
         stopSpeech()
         val rate = prefs.rateTenths / 10f
         speaker = if (offlineVoice()) {
-            val sid = if (prefs.voice == Prefs.VOICE_MALE) SherpaModel.AISHELL3_MALE else SherpaModel.AISHELL3_FEMALE
-            SherpaSpeaker(modelDir, sid, rate)
+            OfflineVoice.speaker(modelDir, prefs.voice == Prefs.VOICE_MALE, rate)
         } else {
             SystemSpeaker(this, rate)
         }
@@ -377,7 +375,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
     }
 
     private fun chooseVoice(voice: Int) {
-        if (voice != Prefs.VOICE_SYSTEM && !SherpaModel.isInstalled(modelDir)) {
+        if (voice != Prefs.VOICE_SYSTEM && !OfflineVoice.isInstalled(modelDir)) {
             promptModelImport()
             return
         }
@@ -415,7 +413,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
         thread {
             val error = try {
                 (contentResolver.openInputStream(uri) ?: throw java.io.IOException("无法读取文件")).use {
-                    SherpaModel.install(it, modelDir)
+                    OfflineVoice.install(it, modelDir)
                 }
                 null
             } catch (e: Exception) {
@@ -751,7 +749,9 @@ class ReaderActivity : Activity(), ReaderView.Source {
             r.addView(control, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
             col.addView(r)
         }
-        row("语音", ui.chips(listOf("系统", "女声", "男声"), { if (offlineVoice()) prefs.voice else Prefs.VOICE_SYSTEM }) { chooseVoice(it) })
+        if (OfflineVoice.AVAILABLE) {
+            row("语音", ui.chips(listOf("系统", "女声", "男声"), { if (offlineVoice()) prefs.voice else Prefs.VOICE_SYSTEM }) { chooseVoice(it) })
+        }
         val rate = LinearLayout(this)
         rate.gravity = Gravity.CENTER_VERTICAL
         rate.addView(ui.slider(20, { prefs.rateTenths - 5 }) { value, done ->
@@ -764,11 +764,11 @@ class ReaderActivity : Activity(), ReaderView.Source {
         ui.refreshers.add { rateValue.text = "${"%.1f".format(prefs.rateTenths / 10f)}×" }
         rate.addView(rateValue, LinearLayout.LayoutParams(dp(56), WRAP_CONTENT).apply { marginEnd = dp(24) })
         row("语速", rate)
-        row("离线模型", LinearLayout(this).apply {
+        if (OfflineVoice.AVAILABLE) row("离线模型", LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            addView(ui.button(if (SherpaModel.isInstalled(modelDir)) "重新导入" else "导入模型") { promptModelImport() })
+            addView(ui.button(if (OfflineVoice.isInstalled(modelDir)) "重新导入" else "导入模型") { promptModelImport() })
             val state = ui.text("", 12.5f, ui.p.faint)
-            ui.refreshers.add { state.text = if (SherpaModel.isInstalled(modelDir)) "已导入" else "女声、男声需要它" }
+            ui.refreshers.add { state.text = if (OfflineVoice.isInstalled(modelDir)) "已导入" else "女声、男声需要它" }
             addView(state, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(4) })
         })
         sheet.addView(col)
