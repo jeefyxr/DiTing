@@ -173,6 +173,48 @@ class ReaderTest {
         assertEquals(1, v.pageInfo().first)
     }
 
+    @Test fun tapAnywhereGoesForwardExceptCentre() {
+        Prefs(app).tapForwardOnly = true
+        val v = readerView(launch().get())
+        tap(v, v.width * 0.1f, v.height * 0.5f)      // left edge: forward, not back
+        assertEquals(2, v.pageInfo().first)
+        tap(v, v.width * 0.5f, v.height * 0.9f)      // bottom middle: forward
+        assertEquals(3, v.pageInfo().first)
+        tap(v, v.width * 0.5f, v.height * 0.5f)      // centre: menu, no page turn
+        assertEquals(3, v.pageInfo().first)
+    }
+
+    @Test fun doubleTapStartsListeningAtThatParagraphAndIsRemembered() {
+        val c = launch()
+        val v = readerView(c.get())
+        val prefs = Prefs(app)
+        assertEquals(null, prefs.listenPosition(bookId))
+        v.turn(1, animate = false)
+        val pageStart = v.offset
+        val pageEnd = v.pageEndOffset()
+
+        // Two quick taps in the lower half of the page: no page turn, listening starts there.
+        val t = SystemClock.uptimeMillis()
+        val x = v.width * 0.8f
+        val y = v.height * 0.6f
+        for (i in 0..1) {
+            v.dispatchTouchEvent(MotionEvent.obtain(t, t + i * 80L, MotionEvent.ACTION_DOWN, x, y, 0))
+            v.dispatchTouchEvent(MotionEvent.obtain(t, t + i * 80L + 20, MotionEvent.ACTION_UP, x, y, 0))
+        }
+        idle(600)
+        assertEquals("double tap must not turn the page", pageStart, v.offset)
+        val heard = prefs.listenPosition(bookId)!!
+        assertEquals(v.chapter, heard.first)
+        assertTrue("starts inside the visible page", heard.second in (pageStart + 1) until pageEnd)
+        assertEquals("starts at the beginning of a paragraph", '\n', v.chapterText()[heard.second - 1])
+
+        // The listening position is kept separately from the reading position.
+        v.turn(1, animate = false, byUser = false)
+        c.pause().stop().destroy()
+        assertEquals(heard, Prefs(app).listenPosition(bookId))
+        assertTrue(Prefs(app).progress(bookId).second > heard.second)
+    }
+
     @Test fun autoTurnCoversFromTopWithStaticText() {
         val a = launch().get()
         val v = readerView(a)

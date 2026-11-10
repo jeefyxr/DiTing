@@ -105,6 +105,11 @@ class GalleryTest {
                 tap(page, page.width / 2f, page.height / 2f)
                 clickText(reader, "目录")
                 shot(reader, "$name-5-contents")
+                reader.onBackPressed()
+                idle()
+                tap(page, page.width / 2f, page.height / 2f)
+                clickText(reader, "听")
+                shot(reader, "$name-6-listen")
                 reader.finish()
             }
         }

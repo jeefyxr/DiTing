@@ -56,6 +56,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("indent", true)
         set(v) = put("indent", v)
 
+    /** true: a tap anywhere but the centre goes forward. false: left goes back, right goes forward. */
+    var tapForwardOnly: Boolean
+        get() = sp.getBoolean("tapForwardOnly", false)
+        set(v) = put("tapForwardOnly", v)
+
     var volumeKeys: Boolean
         get() = sp.getBoolean("volumeKeys", true)
         set(v) = put("volumeKeys", v)
@@ -86,11 +91,20 @@ class Prefs(context: Context) {
         .putLong("read:$bookId", System.currentTimeMillis())
         .apply()
 
+    /** Where listening last stopped: chapter and character offset, or null if never listened. */
+    fun listenPosition(bookId: String): Pair<Int, Int>? {
+        val s = sp.getString("listen:$bookId", null)?.split(':') ?: return null
+        return (s.getOrNull(0)?.toIntOrNull() ?: return null) to (s.getOrNull(1)?.toIntOrNull() ?: return null)
+    }
+
+    fun saveListenPosition(bookId: String, chapter: Int, offset: Int) =
+        sp.edit().putString("listen:$bookId", "$chapter:$offset").apply()
+
     fun fraction(bookId: String) = sp.getFloat("pct:$bookId", 0f)
     fun lastRead(bookId: String) = sp.getLong("read:$bookId", 0L)
 
     fun clearProgress(bookId: String) =
-        sp.edit().remove("pos:$bookId").remove("pct:$bookId").remove("read:$bookId").apply()
+        sp.edit().remove("pos:$bookId").remove("pct:$bookId").remove("read:$bookId").remove("listen:$bookId").apply()
 
     class Theme(val name: String, val background: Int, val text: Int, val dark: Boolean)
 

@@ -27,5 +27,21 @@ object Sentences {
         return limit
     }
 
+    /** Start of the speakable sentence before the one that contains [position]. */
+    fun previousStart(text: CharSequence, position: Int): Int {
+        var previous = 0
+        var current = 0
+        var start = 0
+        while (start < text.length && start <= position) {
+            val e = end(text, start)
+            if (isSpeakable(text.subSequence(start, e))) {
+                previous = current
+                current = start
+            }
+            start = e
+        }
+        return previous
+    }
+
     fun isSpeakable(s: CharSequence) = s.any { it.isLetterOrDigit() }
 }

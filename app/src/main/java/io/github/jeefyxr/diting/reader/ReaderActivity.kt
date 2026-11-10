@@ -56,6 +56,8 @@ class ReaderActivity : Activity(), ReaderView.Source {
     private var settingsScroll: ScrollView? = null
     private var tocSheet: View? = null
     private var tocList: ListView? = null
+    private var listenSheet: View? = null
+    private var listenStatus: TextView? = null
     private var progressLabel: TextView? = null
     private var cutoutTop = 0
     private var cutoutBottom = 0
@@ -105,6 +107,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
         view.onPageChanged = { byUser -> onPageChanged(byUser) }
         view.onEdge = { dir -> toast(if (dir > 0) "已经是最后一页" else "已经是第一页") }
         view.onAutoFinished = { stopAuto(); toast("已经是最后一页") }
+        view.onParagraphDoubleTap = { offset -> startSpeech(at = offset) }
 
         root = FrameLayout(this)
         root.addView(view, MATCH_PARENT, MATCH_PARENT)
@@ -206,6 +209,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
                 turnMode = prefs.turnMode,
                 serif = prefs.serif,
                 indent = prefs.indent,
+                tapForwardOnly = prefs.tapForwardOnly,
             )
         )
     }
@@ -254,7 +258,11 @@ class ReaderActivity : Activity(), ReaderView.Source {
 
     private fun offlineVoice() = prefs.voice != Prefs.VOICE_SYSTEM && SherpaModel.isInstalled(modelDir)
 
-    private fun startSpeech() {
+    /**
+     * Starts reading aloud: from [at] if given, else (with [resume]) from where listening last
+     * stopped in this book, else from the top of the current page.
+     */
+    private fun startSpeech(at: Int? = null, resume: Boolean = false) {
         stopAuto()
         stopSpeech()
         val rate = prefs.rateTenths / 10f
@@ -265,7 +273,16 @@ class ReaderActivity : Activity(), ReaderView.Source {
             SystemSpeaker(this, rate)
         }
         speaking = true
-        speechPos = view.offset
+        val saved = prefs.listenPosition(meta.id)?.takeIf { it.first in 0 until chapterCount }
+        speechPos = when {
+            at != null -> at
+            resume && saved != null -> {
+                val onThisPage = saved.first == view.chapter && saved.second >= view.offset && saved.second < view.pageEndOffset()
+                if (!onThisPage) view.open(saved.first, saved.second)
+                saved.second.coerceAtMost(view.chapterText().length)
+            }
+            else -> view.offset
+        }
         refresh()
         speakNext()
     }
@@ -278,6 +295,30 @@ class ReaderActivity : Activity(), ReaderView.Source {
         if (::view.isInitialized) {
             view.setHighlight(-1, -1)
             refresh()
+        }
+    }
+
+    /** Jumps one sentence forward or back while listening. */
+    private fun skipSentence(direction: Int) {
+        if (!speaking) return
+        val text = view.chapterText()
+        speechGeneration++
+        speaker?.stop()
+        speechPos = if (direction > 0) Sentences.end(text, speechPos.coerceAtMost(text.length)) else Sentences.previousStart(text, speechPos)
+        speakNext()
+    }
+
+    private fun updateListenStatus() {
+        val label = listenStatus ?: return
+        val saved = prefs.listenPosition(meta.id)?.takeIf { it.first in 0 until chapterCount }
+        label.text = when {
+            speaking -> {
+                val text = view.chapterText()
+                val start = speechPos.coerceIn(0, text.length)
+                text.substring(start, Sentences.end(text, start).coerceAtMost(text.length)).trim()
+            }
+            saved != null -> "上次听到 · ${chapterTitle(saved.first)}"
+            else -> "还没有听过这本书，将从当前页开始"
         }
     }
 
@@ -309,10 +350,13 @@ class ReaderActivity : Activity(), ReaderView.Source {
                 speechPos = end
                 continue
             }
+            if (speechPos < view.offset) view.open(view.chapter, speechPos)
             while (speechPos >= view.pageEndOffset()) {
                 if (!view.turn(1, animate = false, byUser = false)) break
             }
             view.setHighlight(speechPos, end)
+            prefs.saveListenPosition(meta.id, view.chapter, speechPos)
+            updateListenStatus()
             if (end < text.length) {
                 val next = text.substring(end, Sentences.end(text, end))
                 if (Sentences.isSpeakable(next)) speaker?.prefetch(next.trim())
@@ -338,7 +382,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
             return
         }
         prefs.voice = voice
-        if (speaking) startSpeech()
+        if (speaking) startSpeech(at = speechPos)
     }
 
     private fun dialogTheme() =
@@ -381,7 +425,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
                 if (isDestroyed) return@runOnUiThread
                 dialog.dismiss()
                 toast(error ?: "模型已导入，可以选择女声或男声")
-                refresh()
+                buildChrome()
             }
         }
     }
@@ -412,6 +456,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
         set(bottomBar, next == MENU, false)
         set(settingsSheet, next == SETTINGS, false)
         set(tocSheet, next == TOC, false)
+        set(listenSheet, next == LISTEN, false)
         scrim?.let { s ->
             s.animate().cancel()
             val dim = if (next == SETTINGS || next == TOC) 1f else 0f
@@ -435,7 +480,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
 
     private fun buildChrome() {
         val scrollY = settingsScroll?.scrollY ?: 0
-        listOf(scrim, topBar, bottomBar, settingsSheet, tocSheet).forEach { it?.let(root::removeView) }
+        listOf(scrimHolder, topBar, bottomBar, settingsSheet, tocSheet, listenSheet).forEach { it?.let(root::removeView) }
         ui = Ui(this, palette(), prefs.softUi)
 
         // A full-screen catcher: any tap outside the chrome closes it. Dimmed behind sheets.
@@ -454,7 +499,9 @@ class ReaderActivity : Activity(), ReaderView.Source {
         val tocHeight = (resources.displayMetrics.heightPixels * 0.8f).toInt()
         tocSheet = buildContents().also { root.addView(it, FrameLayout.LayoutParams(MATCH_PARENT, tocHeight, Gravity.BOTTOM)) }
 
-        listOf(topBar, bottomBar, settingsSheet, tocSheet).forEach { it?.visibility = View.GONE }
+        listenSheet = buildListen().also { root.addView(it, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM)) }
+
+        listOf(topBar, bottomBar, settingsSheet, tocSheet, listenSheet).forEach { it?.visibility = View.GONE }
         dim.alpha = 0f
         catcher.visibility = View.GONE
         show(overlay, animate = false)
@@ -530,10 +577,8 @@ class ReaderActivity : Activity(), ReaderView.Source {
         tab({ if (view.autoRunning) IconDrawable.PAUSE else IconDrawable.PLAY }, { "自动" }, { view.autoRunning }) {
             if (view.autoRunning) stopAuto() else startAuto()
         }
-        tab({ if (speaking) IconDrawable.PAUSE else IconDrawable.VOICE }, { if (speaking) "停止" else "朗读" }, { speaking }) {
-            if (speaking) stopSpeech() else { show(NONE); startSpeech() }
-        }
         tab({ IconDrawable.TEXT }, { "设置" }) { show(SETTINGS) }
+        tab({ IconDrawable.VOICE }, { "听" }, { speaking }) { show(LISTEN) }
         col.addView(tabs, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(6) })
         val wrap = LinearLayout(this)
         wrap.orientation = LinearLayout.VERTICAL
@@ -635,23 +680,8 @@ class ReaderActivity : Activity(), ReaderView.Source {
             ui.refresh()
             if (view.autoRunning) view.startAuto(prefs.autoSeconds)
         }) { "${prefs.autoSeconds} 秒/页" }
+        row("点击", ui.chips(listOf("左右翻页", "全屏向后"), { if (prefs.tapForwardOnly) 1 else 0 }) { prefs.tapForwardOnly = it == 1; restyle() })
         switchRow("音量键翻页", { prefs.volumeKeys }) { prefs.volumeKeys = it }
-
-        section("朗读")
-        val voices = ui.chips(listOf("系统", "女声", "男声"), { if (offlineVoice()) prefs.voice else Prefs.VOICE_SYSTEM }) { chooseVoice(it) }
-        row("语音", voices)
-        sliderRow("语速", ui.slider(20, { prefs.rateTenths - 5 }) { value, done ->
-            prefs.rateTenths = value + 5
-            ui.refresh()
-            if (done && speaking) startSpeech()
-        }) { "${"%.1f".format(prefs.rateTenths / 10f)}×" }
-        row("离线模型", LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            addView(ui.button(if (SherpaModel.isInstalled(modelDir)) "重新导入" else "导入模型") { promptModelImport() })
-            val state = ui.text("", 12.5f, ui.p.faint)
-            ui.refreshers.add { state.text = if (SherpaModel.isInstalled(modelDir)) "已导入" else "未导入，女声/男声需要它" }
-            addView(state, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(4) })
-        })
 
         val scroll = MaxHeightScrollView(this, (resources.displayMetrics.heightPixels * 0.72f).toInt())
         scroll.isVerticalScrollBarEnabled = false
@@ -659,6 +689,89 @@ class ReaderActivity : Activity(), ReaderView.Source {
         scroll.addView(col)
         settingsScroll = scroll
         sheet.addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        return sheet
+    }
+
+    /** The listening panel: transport controls on top, voice settings below. */
+    private fun buildListen(): View {
+        val sheet = sheetShell()
+        val grabber = View(this)
+        grabber.background = ui.shape(ui.p.outline, 100f)
+        sheet.addView(grabber, LinearLayout.LayoutParams(dp(36), dp(4)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(12)
+        })
+
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.VERTICAL
+        head.setPadding(dp(24), dp(18), dp(24), 0)
+        head.addView(ui.text("听书", 19f, medium = true), LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        val status = ui.text("", 13.5f, ui.p.muted)
+        status.maxLines = 2
+        status.minLines = 2
+        status.ellipsize = android.text.TextUtils.TruncateAt.END
+        status.setLineSpacing(0f, 1.35f)
+        listenStatus = status
+        ui.refreshers.add { updateListenStatus() }
+        head.addView(status, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(10) })
+        sheet.addView(head)
+
+        val transport = LinearLayout(this)
+        transport.gravity = Gravity.CENTER
+        fun skip(kind: Int, direction: Int) = ui.icon(kind) { skipSentence(direction) }.also { button ->
+            ui.refreshers.add { button.alpha = if (speaking) 1f else 0.3f }
+        }
+        transport.addView(skip(IconDrawable.SKIP_PREV, -1))
+        transport.addView(
+            ui.playButton({ if (speaking) IconDrawable.PAUSE else IconDrawable.PLAY }) {
+                if (speaking) stopSpeech() else startSpeech(resume = true)
+            },
+            LinearLayout.LayoutParams(dp(72), dp(72)).apply { marginStart = dp(28); marginEnd = dp(28) },
+        )
+        transport.addView(skip(IconDrawable.SKIP_NEXT, 1))
+        sheet.addView(transport, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(14) })
+
+        val fromHere = ui.button("从当前页开始听") { startSpeech() }
+        (fromHere.layoutParams as LinearLayout.LayoutParams).apply { gravity = Gravity.CENTER_HORIZONTAL; marginEnd = 0; topMargin = dp(12) - ui.pad }
+        sheet.addView(fromHere)
+        sheet.addView(
+            ui.text("阅读时双击任意一段，也可以从那里开始听", 12f, ui.p.faint).apply { gravity = Gravity.CENTER },
+            LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(12) - ui.pad },
+        )
+        sheet.addView(ui.hairline(), LinearLayout.LayoutParams(MATCH_PARENT, maxOf(1, dp(1) / 2)).apply { topMargin = dp(18) })
+
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(24), dp(6), 0, dp(16) + cutoutBottom)
+        fun row(label: String, control: View) {
+            val r = LinearLayout(this)
+            r.gravity = Gravity.CENTER_VERTICAL
+            r.minimumHeight = dp(56)
+            r.addView(ui.text(label, 14f, ui.p.muted), LinearLayout.LayoutParams(dp(76) - ui.pad, WRAP_CONTENT))
+            r.addView(control, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            col.addView(r)
+        }
+        row("语音", ui.chips(listOf("系统", "女声", "男声"), { if (offlineVoice()) prefs.voice else Prefs.VOICE_SYSTEM }) { chooseVoice(it) })
+        val rate = LinearLayout(this)
+        rate.gravity = Gravity.CENTER_VERTICAL
+        rate.addView(ui.slider(20, { prefs.rateTenths - 5 }) { value, done ->
+            prefs.rateTenths = value + 5
+            ui.refresh()
+            if (done && speaking) startSpeech(at = speechPos)
+        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = ui.pad })
+        val rateValue = ui.text("", 13.5f, medium = true)
+        rateValue.gravity = Gravity.END
+        ui.refreshers.add { rateValue.text = "${"%.1f".format(prefs.rateTenths / 10f)}×" }
+        rate.addView(rateValue, LinearLayout.LayoutParams(dp(56), WRAP_CONTENT).apply { marginEnd = dp(24) })
+        row("语速", rate)
+        row("离线模型", LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ui.button(if (SherpaModel.isInstalled(modelDir)) "重新导入" else "导入模型") { promptModelImport() })
+            val state = ui.text("", 12.5f, ui.p.faint)
+            ui.refreshers.add { state.text = if (SherpaModel.isInstalled(modelDir)) "已导入" else "女声、男声需要它" }
+            addView(state, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(4) })
+        })
+        sheet.addView(col)
         return sheet
     }
 
@@ -726,5 +839,6 @@ class ReaderActivity : Activity(), ReaderView.Source {
         private const val MENU = 1
         private const val SETTINGS = 2
         private const val TOC = 3
+        private const val LISTEN = 4
     }
 }

@@ -45,6 +45,17 @@ class SpeechTest {
         assertTrue(Sentences.isSpeakable("　　好。"))
     }
 
+    @Test fun previousSentence() {
+        val text = "第一句。第二句！\n……\n　　第三句？第四句"
+        val starts = listOf(0, 4, text.indexOf("　　第三句"), text.indexOf("第四句"))
+        assertEquals(0, Sentences.previousStart(text, 0))
+        assertEquals(0, Sentences.previousStart(text, 2))
+        assertEquals(starts[0], Sentences.previousStart(text, starts[1]))
+        // Unspeakable pieces (the line of dots) are skipped over.
+        assertEquals(starts[1], Sentences.previousStart(text, starts[2] + 3))
+        assertEquals(starts[2], Sentences.previousStart(text, text.length))
+    }
+
     @Test fun overlongSentenceBreaksAtComma() {
         val text = ("很长的一句话没有句号，" + "字".repeat(30)).repeat(10)
         val parts = split(text)

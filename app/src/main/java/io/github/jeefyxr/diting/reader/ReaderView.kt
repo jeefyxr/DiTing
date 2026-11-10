@@ -57,6 +57,8 @@ class ReaderView(context: Context) : View(context) {
         val turnMode: Int,
         val serif: Boolean,
         val indent: Boolean,
+        /** A tap anywhere outside the centre turns forward, instead of left = back, right = forward. */
+        val tapForwardOnly: Boolean = false,
     )
 
     data class PageRef(val chapter: Int, val page: Int)
@@ -89,6 +91,8 @@ class ReaderView(context: Context) : View(context) {
     var onPageChanged: ((byUser: Boolean) -> Unit)? = null
     var onEdge: ((direction: Int) -> Unit)? = null
     var onAutoFinished: (() -> Unit)? = null
+    /** Double tap on a paragraph; receives the offset where that paragraph starts on this page. */
+    var onParagraphDoubleTap: ((offset: Int) -> Unit)? = null
 
     var chapter = 0; private set
     /** Character offset of the top of the visible page within the chapter's display text. */
@@ -121,6 +125,12 @@ class ReaderView(context: Context) : View(context) {
     private var downX = 0f; private var downY = 0f
     private var dragging = false
     private var dragDir = 0
+
+    // A single tap is held back briefly so that a second tap can make it a double tap.
+    private var pendingTap: Runnable? = null
+    private var lastTapTime = 0L
+    private var lastTapX = 0f
+    private var lastTapY = 0f
 
     // Auto page turn: fraction of the next page already revealed from the top.
     var autoRunning = false; private set
@@ -340,6 +350,8 @@ class ReaderView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
+        pendingTap?.let(::removeCallbacks)
+        pendingTap = null
         removeCallbacks(minuteTick)
         animator?.cancel()
         super.onDetachedFromWindow()
@@ -530,7 +542,7 @@ class ReaderView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_UP -> {
                 if (!dragging) {
-                    onTap(event.x, event.y)
+                    onTapUp(event.x, event.y, event.eventTime)
                 } else {
                     dragging = false
                     val size = axisSize()
@@ -552,12 +564,54 @@ class ReaderView(context: Context) : View(context) {
         return true
     }
 
+    private fun onTapUp(x: Float, y: Float, time: Long) {
+        val pending = pendingTap
+        if (autoRunning || onParagraphDoubleTap == null) {
+            onTap(x, y)
+        } else if (pending != null && time - lastTapTime <= DOUBLE_TAP_MS &&
+            abs(x - lastTapX) < slop * 4 && abs(y - lastTapY) < slop * 4
+        ) {
+            removeCallbacks(pending)
+            pendingTap = null
+            paragraphAt(y)?.let { onParagraphDoubleTap?.invoke(it) }
+        } else {
+            if (pending != null) { removeCallbacks(pending); pending.run() }
+            lastTapTime = time
+            lastTapX = x
+            lastTapY = y
+            val r = Runnable { pendingTap = null; onTap(x, y) }
+            pendingTap = r
+            postDelayed(r, DOUBLE_TAP_MS)
+        }
+    }
+
+    /** Start of the paragraph drawn at height [y], limited to the part of it on this page. */
+    private fun paragraphAt(y: Float): Int? {
+        val cl = layoutFor(chapter) ?: return null
+        val page = cl.pageOf(offset)
+        val first = cl.firstLines[page]
+        val last = cl.firstLines[page + 1] - 1
+        val ly = (y - contentTop() + cl.layout.getLineTop(first)).toInt()
+        if (ly < cl.layout.getLineTop(first) || ly > cl.layout.getLineBottom(last)) return null
+        val line = cl.layout.getLineForVertical(ly).coerceIn(first, last)
+        var start = cl.layout.getLineStart(line)
+        while (start > 0 && cl.text[start - 1] != '\n') start--
+        return maxOf(start, cl.pageStart(page))
+    }
+
     private fun onTap(x: Float, y: Float) {
         if (autoRunning) {
             onCenterTap?.invoke()
             return
         }
-        val p = if (vertical) y / height else x / width
+        val fx = x / width
+        val fy = y / height
+        if (style.tapForwardOnly) {
+            // The middle of the screen opens the menu; everywhere else goes forward.
+            if (fx in 0.3f..0.7f && fy in 0.3f..0.7f) onCenterTap?.invoke() else turn(1)
+            return
+        }
+        val p = if (vertical) fy else fx
         when {
             p < 0.33f -> turn(-1)
             p > 0.67f -> turn(1)
@@ -588,5 +642,9 @@ class ReaderView(context: Context) : View(context) {
 
     private fun finishAnimation() {
         animator?.end()
+    }
+
+    private companion object {
+        const val DOUBLE_TAP_MS = 220L
     }
 }

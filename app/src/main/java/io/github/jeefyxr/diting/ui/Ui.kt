@@ -89,6 +89,8 @@ class IconDrawable(private val kind: Int, color: Int, private val sizePx: Int) :
                 addCircle(11.5f, 12.5f, 7.6f, Path.Direction.CW)
                 op(cut, Path.Op.DIFFERENCE)
             }
+            SKIP_NEXT -> { moveTo(6.5f, 6.5f); lineTo(14.5f, 12f); lineTo(6.5f, 17.5f); close(); line(17.5f, 6.5f, 17.5f, 17.5f) }
+            SKIP_PREV -> { moveTo(17.5f, 6.5f); lineTo(9.5f, 12f); lineTo(17.5f, 17.5f); close(); line(6.5f, 6.5f, 6.5f, 17.5f) }
             VOICE -> {
                 moveTo(3.5f, 9.6f); lineTo(7f, 9.6f); lineTo(11.5f, 6f); lineTo(11.5f, 18f); lineTo(7f, 14.4f); lineTo(3.5f, 14.4f); close()
                 addArc(9.4f, 8.4f, 16.6f, 15.6f, -45f, 90f)
@@ -129,6 +131,8 @@ class IconDrawable(private val kind: Int, color: Int, private val sizePx: Int) :
         const val MOON = 7
         const val VOICE = 8
         const val TEXT = 9
+        const val SKIP_NEXT = 10
+        const val SKIP_PREV = 11
     }
 }
 
@@ -293,6 +297,24 @@ class Ui(val context: Context, val p: Palette, val soft: Boolean) {
             caption.setTextColor(if (on) p.accent else p.muted)
         }
         return col
+    }
+
+    /** The large round play/pause button of the listening panel. */
+    fun playButton(kind: () -> Int, onClick: () -> Unit): ImageView {
+        val b = softLayer(ImageView(context))
+        b.scaleType = ImageView.ScaleType.CENTER
+        b.setOnClickListener { onClick() }
+        b.layoutParams = LinearLayout.LayoutParams(dp(72), dp(72))
+        refreshers.add {
+            if (soft) {
+                b.background = raised(100f, dp(6))
+                b.setImageDrawable(iconDrawable(kind(), p.accent, 30))
+            } else {
+                b.background = pressable(shape(p.accent, 100f))
+                b.setImageDrawable(iconDrawable(kind(), p.onAccent, 30))
+            }
+        }
+        return b
     }
 
     private fun chip(label: String, minWidthDp: Int = 0): TextView {
