@@ -31,6 +31,54 @@ class SpeechTest {
         assertTrue(Sentences.isSpeakable("　　好。"))
     }
 
+    @Test fun semicolonsDoNotSplitASentence() {
+        assertEquals(listOf("他来了；她走了。", "天黑了。"), split("他来了；她走了。天黑了。"))
+    }
+
+    @Test fun cacheKeepsRecentlyUsedClipsWithinItsLimit() {
+        val dir = java.io.File(System.getProperty("java.io.tmpdir"), "diting-cache-${System.nanoTime()}")
+        try {
+            fun clip(seconds: Int, fill: Int) = io.github.jeefyxr.diting.tts.AudioCache.Clip(ShortArray(16000 * seconds) { (fill + it % 7).toShort() }, 16000)
+            val oneSecond = 8L + 32000
+            var cache = io.github.jeefyxr.diting.tts.AudioCache(dir, 3 * oneSecond)
+            cache.put("a", clip(1, 10)); cache.put("b", clip(1, 20)); cache.put("c", clip(1, 30))
+            assertEquals(3 * oneSecond, cache.size())
+            val a = cache.get("a")!!                      // "a" is now the most recently used
+            assertEquals(16000, a.sampleRate)
+            assertEquals(16000, a.samples.size)
+            assertEquals((10 + 5).toShort(), a.samples[5])
+            cache.put("d", clip(1, 40))                   // evicts "b", the least recently used
+            assertEquals(null, cache.get("b"))
+            assertTrue(cache.get("a") != null && cache.get("c") != null && cache.get("d") != null)
+            assertEquals(3, cache.count())
+
+            // Survives a restart, drops clips when the limit shrinks, ignores damaged files.
+            cache = io.github.jeefyxr.diting.tts.AudioCache(dir, 3 * oneSecond)
+            assertEquals(3 * oneSecond, cache.size())
+            cache.limitBytes = oneSecond
+            assertEquals(1, cache.count())
+            assertEquals(1, dir.list()!!.size)
+            val survivor = dir.list()!![0]
+            java.io.File(dir, survivor).writeText("damaged")
+            assertEquals(null, cache.get(survivor))
+            assertEquals(0L, cache.size())
+            cache.put("too-big", clip(5, 1))              // larger than the whole cache: not stored
+            assertEquals(0, cache.count())
+            cache.limitBytes = 100 * oneSecond
+            cache.put("x", clip(2, 1)); cache.clear()
+            assertEquals(0L, cache.size())
+            assertEquals(0, dir.list()!!.size)
+
+            val key = io.github.jeefyxr.diting.tts.AudioCache.key("v", 1, 1.0f, "你好")
+            assertEquals(32, key.length)
+            assertTrue(key != io.github.jeefyxr.diting.tts.AudioCache.key("v", 2, 1.0f, "你好"))
+            assertTrue(key != io.github.jeefyxr.diting.tts.AudioCache.key("v", 1, 1.1f, "你好"))
+            assertEquals(key, io.github.jeefyxr.diting.tts.AudioCache.key("v", 1, 1.0f, "你好"))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     @Test fun previousSentence() {
         val text = "第一句。第二句！\n……\n　　第三句？第四句"
         val starts = listOf(0, 4, text.indexOf("　　第三句"), text.indexOf("第四句"))

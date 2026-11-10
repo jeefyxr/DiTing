@@ -28,6 +28,7 @@ import android.widget.Toast
 import io.github.jeefyxr.diting.Prefs
 import io.github.jeefyxr.diting.data.BookMeta
 import io.github.jeefyxr.diting.data.BookStore
+import io.github.jeefyxr.diting.tts.AudioCache
 import io.github.jeefyxr.diting.tts.OfflineVoice
 import io.github.jeefyxr.diting.tts.Speaker
 import io.github.jeefyxr.diting.tts.SystemSpeaker
@@ -45,6 +46,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
     private lateinit var root: FrameLayout
     private lateinit var ui: Ui
     private val voices by lazy { OfflineVoice(filesDir) }
+    private val audioCache by lazy { AudioCache(File(cacheDir, "speech"), prefs.cacheMb * 1048576L) }
 
     // Chrome: everything drawn over the page. Rebuilt whenever the theme or skin changes.
     private var overlay = NONE
@@ -266,7 +268,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
         stopSpeech()
         val rate = prefs.rateTenths / 10f
         speaker = if (offlineVoice()) {
-            voices.speaker(prefs.voice == Prefs.VOICE_MALE, rate)
+            voices.speaker(prefs.voice == Prefs.VOICE_MALE, rate, audioCache)
         } else {
             SystemSpeaker(this, rate)
         }
@@ -355,11 +357,18 @@ class ReaderActivity : Activity(), ReaderView.Source {
             view.setHighlight(speechPos, end)
             prefs.saveListenPosition(meta.id, view.chapter, speechPos)
             updateListenStatus()
-            if (end < text.length) {
-                val next = text.substring(end, Sentences.end(text, end))
-                if (Sentences.isSpeakable(next)) speaker?.prefetch(next.trim())
+            // Synthesize a few sentences ahead so a slow voice does not stall between sentences.
+            var ahead = end
+            var queued = 0
+            while (queued < LOOK_AHEAD && ahead < text.length) {
+                val aheadEnd = Sentences.end(text, ahead)
+                val next = text.substring(ahead, aheadEnd)
+                if (Sentences.isSpeakable(next)) { speaker?.prefetch(next.trim()); queued++ }
+                ahead = aheadEnd
             }
-            speaker?.speak(sentence.trim()) { ok ->
+            // A longer breath at the end of a paragraph than between its sentences.
+            val pause = if (sentence.endsWith('\n') || end >= text.length) PARAGRAPH_PAUSE_MS else SENTENCE_PAUSE_MS
+            speaker?.speak(sentence.trim(), pause) { ok ->
                 if (generation != speechGeneration) return@speak
                 if (ok) {
                     speechPos = end
@@ -848,7 +857,25 @@ class ReaderActivity : Activity(), ReaderView.Source {
             }
             addView(state, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(4) })
         })
-        sheet.addView(col)
+        if (offlineSupported) {
+            row("配音缓存", ui.chips(Prefs.CACHE_SIZES_MB.map { "${it}M" }, { Prefs.CACHE_SIZES_MB.indexOf(prefs.cacheMb) }) {
+                prefs.cacheMb = Prefs.CACHE_SIZES_MB[it]
+                audioCache.limitBytes = prefs.cacheMb * 1048576L
+            })
+            row("已缓存", LinearLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                addView(ui.button("清空") { audioCache.clear(); ui.refresh() })
+                val used = ui.text("", 12.5f, ui.p.faint)
+                ui.refreshers.add { used.text = "${"%.1f".format(audioCache.size() / 1048576f)} MB · ${audioCache.count()} 句" }
+                addView(used, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(4) })
+            })
+        }
+        // The panel has grown past what fits on small screens, so its lower half scrolls.
+        val scroll = MaxHeightScrollView(this, (resources.displayMetrics.heightPixels * 0.42f).toInt())
+        scroll.isVerticalScrollBarEnabled = false
+        scroll.overScrollMode = View.OVER_SCROLL_NEVER
+        scroll.addView(col)
+        sheet.addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
         return sheet
     }
 
@@ -917,5 +944,8 @@ class ReaderActivity : Activity(), ReaderView.Source {
         private const val SETTINGS = 2
         private const val TOC = 3
         private const val LISTEN = 4
+        private const val LOOK_AHEAD = 3
+        private const val SENTENCE_PAUSE_MS = 180
+        private const val PARAGRAPH_PAUSE_MS = 480
     }
 }

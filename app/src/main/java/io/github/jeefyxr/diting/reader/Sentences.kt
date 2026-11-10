@@ -2,9 +2,11 @@ package io.github.jeefyxr.diting.reader
 
 /** Cuts text into sentence-sized pieces for speech. */
 object Sentences {
-    private const val ENDERS = "。！？!?；;…\n"
+    private const val ENDERS = "。！？!?…\n"
     private const val CLOSERS = "”’」』）)】》\"'"
-    private const val SOFT_BREAKS = "，,、：: "
+    // A semicolon joins clauses of one sentence: splitting there breaks the intonation, so it is
+    // only used, like a comma, to cut a sentence that is too long to synthesize in one go.
+    private const val SOFT_BREAKS = "；;，,、：: "
     const val MAX_LENGTH = 120
 
     /** Index just past the sentence that begins at [start]. */

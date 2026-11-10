@@ -74,6 +74,11 @@ class Prefs(context: Context) {
         get() = int("rate", 10, 5..25)
         set(v) = put("rate", v.coerceIn(5, 25))
 
+    /** Upper bound of the spoken-sentence cache in megabytes. */
+    var cacheMb: Int
+        get() = int("cacheMb", 100, 0..2000)
+        set(v) = put("cacheMb", v)
+
     fun progress(bookId: String): Pair<Int, Int> {
         val s = sp.getString("pos:$bookId", null)?.split(':') ?: return 0 to 0
         return (s.getOrNull(0)?.toIntOrNull() ?: 0) to (s.getOrNull(1)?.toIntOrNull() ?: 0)
@@ -118,6 +123,7 @@ class Prefs(context: Context) {
         val PARAGRAPH_SPACINGS = floatArrayOf(0f, 0.3f, 0.6f, 1f)
         val MARGINS_DP = intArrayOf(14, 22, 32)
         const val NIGHT_THEME = 4
+        val CACHE_SIZES_MB = intArrayOf(50, 100, 200, 500)
 
         val THEMES = listOf(
             Theme("纸张", 0xFFF3EAD7.toInt(), 0xFF3A3026.toInt(), false),

@@ -24,8 +24,8 @@ class OfflineVoice(private val root: File) {
     fun modelInstalled() = SherpaModel.isExpectedModel(modelDir)
     fun isInstalled() = engineInstalled() && modelInstalled()
 
-    fun speaker(male: Boolean, rate: Float): Speaker =
-        SherpaSpeaker(this, if (male) SherpaModel.MALE_SPEAKER else SherpaModel.FEMALE_SPEAKER, rate)
+    fun speaker(male: Boolean, rate: Float, cache: AudioCache): Speaker =
+        SherpaSpeaker(this, if (male) SherpaModel.MALE_SPEAKER else SherpaModel.FEMALE_SPEAKER, rate, cache)
 
     /** Loads the engine into this process. Safe to call repeatedly. */
     fun load() = synchronized(LOCK) {

@@ -10,8 +10,11 @@ import java.util.Locale
 
 /** Speaks one sentence at a time. All methods are called on, and call back on, the main thread. */
 interface Speaker {
-    /** Speaks [text]; [onDone] receives false if speech is not possible. Not called after [stop]. */
-    fun speak(text: String, onDone: (ok: Boolean) -> Unit)
+    /**
+     * Speaks [text], then stays silent for [pauseMs]; [onDone] receives false if speech is not
+     * possible. Not called after [stop].
+     */
+    fun speak(text: String, pauseMs: Int, onDone: (ok: Boolean) -> Unit)
 
     /** Hint that [text] will be spoken next, so it can be synthesized ahead of time. */
     fun prefetch(text: String) {}
@@ -57,9 +60,10 @@ class SystemSpeaker(context: Context, private val rate: Float) : Speaker {
         main.post { callbacks.remove(id)?.invoke(ok) }
     }
 
-    override fun speak(text: String, onDone: (Boolean) -> Unit) {
+    // The phone's engine paces sentences itself, so the extra pause is not applied here.
+    override fun speak(text: String, pauseMs: Int, onDone: (Boolean) -> Unit) {
         when (ready) {
-            null -> pending = { speak(text, onDone) }
+            null -> pending = { speak(text, pauseMs, onDone) }
             false -> onDone(false)
             true -> {
                 val id = "u${++generation}"
