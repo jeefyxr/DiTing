@@ -33,11 +33,11 @@ class BookParserTest {
     }
 
     @Test fun txtDecodesGbkUtf16AndUtf8() {
-        val expected = BookParser.parse("a.txt", novel.toByteArray(Charsets.UTF_8))
-        val plain = novel.removePrefix("﻿")
-        assertEquals(expected, BookParser.parse("a.txt", plain.toByteArray(Charset.forName("GBK"))))
-        assertEquals(expected, BookParser.parse("a.txt", byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + plain.toByteArray(Charsets.UTF_16LE)))
-        assertEquals(expected, BookParser.parse("a.txt", plain.toByteArray(Charsets.UTF_8)))
+        val expected = BookParser.parse("a.txt", novel.toByteArray(Charsets.UTF_8)).chapters
+        val plain = novel.removePrefix("\uFEFF")
+        assertEquals(expected, BookParser.parse("a.txt", plain.toByteArray(Charset.forName("GBK"))).chapters)
+        assertEquals(expected, BookParser.parse("a.txt", byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + plain.toByteArray(Charsets.UTF_16LE)).chapters)
+        assertEquals(expected, BookParser.parse("a.txt", plain.toByteArray(Charsets.UTF_8)).chapters)
     }
 
     @Test fun headingDetectionIsNotFooledByProse() {
@@ -107,14 +107,14 @@ class BookParserTest {
             container,
             "OEBPS/content.opf" to """<?xml version="1.0"?>
                 <package xmlns="http://www.idpf.org/2007/opf" version="2.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-                <dc:title>围城 &amp; 其他</dc:title></metadata>
+                <dc:title>围城 &amp; 其他</dc:title><meta content="img" name="cover"/></metadata>
                 <manifest>
                   <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
                   <item id="cover" href="text/cover.xhtml" media-type="application/xhtml+xml"/>
                   <item id='c1' href='text/c%201.xhtml' media-type='application/xhtml+xml'/>
                   <item id="c2" href="text/c2.xhtml" media-type="application/xhtml+xml"/>
                   <item id="img" href="img/a.png" media-type="image/png"/>
-                </manifest>
+                </manifest><!-- EPUB 2 cover -->
                 <spine toc="ncx"><itemref idref="cover"/><itemref idref="c1"/><itemref idref="c2"/></spine></package>""",
             "OEBPS/toc.ncx" to """<ncx><navMap>
                 <navPoint id="a"><navLabel><text>第一章 归国</text></navLabel><content src="text/c%201.xhtml#top"/></navPoint>
@@ -129,6 +129,7 @@ class BookParserTest {
         assertEquals(listOf("第一章 归国", "第二章"), book.chapters.map { it.title })
         assertEquals("　　红海早过了。\n　　船在印度洋面上开驶着。", book.chapters[0].text)
         assertEquals("　　据说“女朋友”就是“情人”的学名。", book.chapters[1].text)
+        assertEquals("binary", book.cover?.toString(Charsets.UTF_8))
     }
 
     @Test fun epub3WithNavDocument() {
@@ -145,6 +146,7 @@ class BookParserTest {
         val book = BookParser.parse("download", bytes)
         assertEquals("三体", book.title)
         assertEquals(listOf("1. 科学边界"), book.chapters.map { it.title })
+        assertNull(book.cover)
     }
 
     @Test fun storeRoundTrip() {
@@ -161,6 +163,7 @@ class BookParserTest {
         assertEquals("　　很多年以后。", store.readChapter(loaded, 3))
         assertEquals(loaded.totalBytes, loaded.chapters.sumOf { it.length.toLong() })
 
+        assertNull(store.coverFile(a.id))
         store.delete(a.id)
         assertNull(store.load(a.id))
         assertEquals(1, store.list().size)

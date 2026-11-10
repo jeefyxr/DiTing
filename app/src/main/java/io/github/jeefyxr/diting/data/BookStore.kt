@@ -56,6 +56,7 @@ class BookStore(private val root: File) {
             for (c in infos) arr.put(JSONObject().put("t", c.title).put("o", c.offset).put("l", c.length))
             val meta = JSONObject().put("title", book.title).put("added", now).put("chapters", arr)
             File(dir, META).writeText(meta.toString())
+            book.cover?.let { File(dir, COVER).writeBytes(it) }
             return BookMeta(id, book.title, now, infos)
         } catch (e: Exception) {
             dir.deleteRecursively()
@@ -73,6 +74,9 @@ class BookStore(private val root: File) {
         return String(buf, Charsets.UTF_8)
     }
 
+    /** The book's cover image, if it came with one. */
+    fun coverFile(id: String): File? = File(File(root, id), COVER).takeIf { it.isFile }
+
     fun delete(id: String) {
         File(root, id).deleteRecursively()
     }
@@ -80,5 +84,6 @@ class BookStore(private val root: File) {
     private companion object {
         const val TEXT = "text.txt"
         const val META = "meta.json"
+        const val COVER = "cover"
     }
 }

@@ -6,8 +6,9 @@ import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.SystemClock
 import android.text.SpannableString
@@ -15,6 +16,7 @@ import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.TextUtils
+import android.text.style.LineHeightSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.view.MotionEvent
@@ -22,11 +24,18 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.animation.DecelerateInterpolator
+import io.github.jeefyxr.diting.Prefs
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 
 /**
  * Paged text view. One chapter is laid out at a time and cut into pages on line boundaries;
  * the reading position is a character offset, so it survives any change of font or margins.
+ *
+ * Android's own line breaker decides where lines end (it knows the CJK punctuation rules), but the
+ * lines are drawn here, stretched to the full width, because Android cannot justify Chinese text.
  */
 class ReaderView(context: Context) : View(context) {
 
@@ -36,9 +45,23 @@ class ReaderView(context: Context) : View(context) {
         fun chapterText(index: Int): String
     }
 
+    class Style(
+        val fontPx: Float,
+        val lineSpacing: Float,
+        /** Extra space after each paragraph, in multiples of the font size. */
+        val paragraphSpacing: Float,
+        val marginPx: Float,
+        val background: Int,
+        val text: Int,
+        val accent: Int,
+        val turnMode: Int,
+        val serif: Boolean,
+        val indent: Boolean,
+    )
+
     data class PageRef(val chapter: Int, val page: Int)
 
-    private class ChapterLayout(val text: CharSequence, val layout: StaticLayout, val firstLines: IntArray) {
+    private class ChapterLayout(val text: CharSequence, val titleLength: Int, val layout: StaticLayout, val firstLines: IntArray) {
         val pageCount get() = firstLines.size - 1
         fun pageStart(page: Int) = layout.getLineStart(firstLines[page])
         fun pageEnd(page: Int) = layout.getLineEnd(firstLines[page + 1] - 1)
@@ -47,6 +70,16 @@ class ReaderView(context: Context) : View(context) {
             var p = 0
             while (p + 1 < pageCount && firstLines[p + 1] <= line) p++
             return p
+        }
+    }
+
+    /** Adds space below the last line of every paragraph in its range. */
+    private class ParagraphGap(private val extra: Int) : LineHeightSpan {
+        override fun chooseHeight(text: CharSequence, start: Int, end: Int, spanstartv: Int, lineHeight: Int, fm: Paint.FontMetricsInt) {
+            if (end > 0 && end <= text.length && text[end - 1] == '\n') {
+                fm.descent += extra
+                fm.bottom += extra
+            }
         }
     }
 
@@ -64,22 +97,23 @@ class ReaderView(context: Context) : View(context) {
     private val density = resources.displayMetrics.density
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
     private val infoPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
-    private val highlightPaint = Paint()
+    private val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val linePaint = Paint()
-    private val path = Path()
+    private val rect = RectF()
     private val cache = HashMap<Int, ChapterLayout>()
+    private val edgeShadow = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0x38000000, 0))
+    private val sweepShadow = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x24000000, 0))
+    private val clock = SimpleDateFormat("HH:mm", Locale.getDefault())
 
-    private var spacing = 1.5f
-    private var margin = 0f
-    private var background = 0xFFFFFFFF.toInt()
-    private var vertical = false
+    private var style = Style(48f, 1.5f, 0.5f, 0f, 0xFFFFFFFF.toInt(), 0xFF000000.toInt(), 0xFFB4553D.toInt(), Prefs.TURN_COVER, false, true)
+    private val vertical get() = style.turnMode == Prefs.TURN_VERTICAL
     private var safeLeft = 0; private var safeTop = 0; private var safeRight = 0; private var safeBottom = 0
-    private val infoHeight = 26 * density
+    private val infoHeight = 30 * density
 
     private var highlightStart = -1
     private var highlightEnd = -1
 
-    // Page-turn slide: pixels the current page is displaced along the turn axis.
+    // Page turn: pixels the moving page is displaced along the turn axis.
     private var slide = 0f
     private var target: PageRef? = null
     private var animator: ValueAnimator? = null
@@ -88,26 +122,31 @@ class ReaderView(context: Context) : View(context) {
     private var dragging = false
     private var dragDir = 0
 
-    // Auto page turn ("cover" mode): fraction of the next page already revealed from the top.
+    // Auto page turn: fraction of the next page already revealed from the top.
     var autoRunning = false; private set
     private var autoProgress = 0f
     private var autoSeconds = 30
     private var autoLast = 0L
 
+    private val minuteTick = object : Runnable {
+        override fun run() {
+            invalidate()
+            postDelayed(this, 60_000 - System.currentTimeMillis() % 60_000 + 50)
+        }
+    }
+
     init {
         infoPaint.textSize = 12 * resources.displayMetrics.scaledDensity
     }
 
-    fun applyStyle(fontPx: Float, spacingMult: Float, marginPx: Float, backgroundColor: Int, textColor: Int, verticalTurn: Boolean) {
-        textPaint.textSize = fontPx
-        textPaint.color = textColor
-        infoPaint.color = (textColor and 0x00FFFFFF) or 0x99000000.toInt()
-        highlightPaint.color = (textColor and 0x00FFFFFF) or 0x30000000
-        linePaint.color = (textColor and 0x00FFFFFF) or 0x66000000
-        spacing = spacingMult
-        margin = marginPx
-        background = backgroundColor
-        vertical = verticalTurn
+    fun applyStyle(s: Style) {
+        style = s
+        textPaint.textSize = s.fontPx
+        textPaint.color = s.text
+        textPaint.typeface = if (s.serif) Typeface.SERIF else Typeface.DEFAULT
+        infoPaint.color = (s.text and 0x00FFFFFF) or 0x73000000
+        highlightPaint.color = (s.accent and 0x00FFFFFF) or 0x38000000
+        linePaint.color = (s.accent and 0x00FFFFFF) or 0x99000000.toInt()
         relayout()
     }
 
@@ -117,6 +156,7 @@ class ReaderView(context: Context) : View(context) {
         chapter = chapterIndex.coerceIn(0, maxOf(0, count - 1))
         offset = maxOf(0, charOffset)
         autoProgress = 0f
+        setHighlight(-1, -1)
         trimCache()
         snapOffset()
         invalidate()
@@ -136,6 +176,14 @@ class ReaderView(context: Context) : View(context) {
         return (cl.pageOf(offset) + 1) to cl.pageCount
     }
 
+    /** Position in the whole book, 0..1, counting every chapter as equally long. */
+    fun bookFraction(): Float {
+        val count = source?.chapterCount ?: return 0f
+        val (page, pages) = pageInfo()
+        if (count == 0 || pages == 0) return 0f
+        return (chapter + (page - 1f) / pages) / count
+    }
+
     fun setHighlight(start: Int, end: Int) {
         highlightStart = start
         highlightEnd = end
@@ -151,7 +199,7 @@ class ReaderView(context: Context) : View(context) {
             if (byUser) onEdge?.invoke(direction)
             return false
         }
-        if (!animate || width == 0 || autoRunning) {
+        if (!animate || width == 0 || autoRunning || style.turnMode == Prefs.TURN_NONE) {
             autoProgress = 0f
             commit(next, byUser)
         } else {
@@ -182,9 +230,10 @@ class ReaderView(context: Context) : View(context) {
 
     // ---- layout ---------------------------------------------------------------------------
 
-    private fun contentWidth() = (width - safeLeft - safeRight - 2 * margin).toInt()
-    private fun contentTop() = safeTop + infoHeight + margin / 2
-    private fun contentHeight() = (height - safeBottom - infoHeight - margin / 2 - contentTop()).toInt()
+    private fun contentLeft() = safeLeft + style.marginPx
+    private fun contentWidth() = (width - safeLeft - safeRight - 2 * style.marginPx).toInt()
+    private fun contentTop() = safeTop + infoHeight + 6 * density
+    private fun contentHeight() = (height - safeBottom - infoHeight - 6 * density - contentTop()).toInt()
     private fun axisSize() = (if (vertical) height else width).toFloat()
 
     private fun relayout() {
@@ -209,11 +258,18 @@ class ReaderView(context: Context) : View(context) {
         cache[index]?.let { return it }
 
         val title = src.chapterTitle(index)
-        val text = SpannableString(title + "\n" + src.chapterText(index))
-        text.setSpan(RelativeSizeSpan(1.25f), 0, title.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        text.setSpan(StyleSpan(Typeface.BOLD), 0, title.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        var body = src.chapterText(index)
+        if (!style.indent) body = body.replace("　　", "")
+        val text = SpannableString(title + "\n" + body)
+        val flags = Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        text.setSpan(RelativeSizeSpan(1.3f), 0, title.length, flags)
+        text.setSpan(StyleSpan(Typeface.BOLD), 0, title.length, flags)
+        text.setSpan(ParagraphGap((style.fontPx * 0.9f).toInt()), 0, title.length + 1, flags)
+        if (style.paragraphSpacing > 0f && body.isNotEmpty()) {
+            text.setSpan(ParagraphGap((style.fontPx * style.paragraphSpacing).toInt()), title.length + 1, text.length, flags)
+        }
         val layout = StaticLayout.Builder.obtain(text, 0, text.length, textPaint, w)
-            .setLineSpacing(0f, spacing)
+            .setLineSpacing(0f, style.lineSpacing)
             .setIncludePad(false)
             .build()
 
@@ -223,11 +279,12 @@ class ReaderView(context: Context) : View(context) {
         while (start < lines) {
             firsts.add(start)
             var end = start + 1
-            while (end < lines && layout.getLineBottom(end) - layout.getLineTop(start) <= h) end++
+            // The gap below a page's last line may hang off the page; its text must not.
+            while (end < lines && layout.getLineBaseline(end) + textPaint.descent() - layout.getLineTop(start) <= h) end++
             start = end
         }
         firsts.add(lines)
-        return ChapterLayout(text, layout, firsts.toIntArray()).also { cache[index] = it }
+        return ChapterLayout(text, title.length, layout, firsts.toIntArray()).also { cache[index] = it }
     }
 
     private fun trimCache() {
@@ -277,29 +334,54 @@ class ReaderView(context: Context) : View(context) {
         return super.onApplyWindowInsets(insets)
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        postDelayed(minuteTick, 60_000 - System.currentTimeMillis() % 60_000 + 50)
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(minuteTick)
+        animator?.cancel()
+        super.onDetachedFromWindow()
+    }
+
     // ---- drawing --------------------------------------------------------------------------
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(background)
+        canvas.drawColor(style.background)
         val cur = current() ?: return
         if (autoRunning) {
             drawAuto(canvas, cur)
             return
         }
         val t = target
-        if (slide != 0f && t != null) {
-            val size = axisSize()
-            val other = slide + if (dragDir > 0) size else -size
-            if (vertical) {
-                drawPage(canvas, t, 0f, other)
-                drawPage(canvas, cur, 0f, slide)
-            } else {
-                drawPage(canvas, t, other, 0f)
-                drawPage(canvas, cur, slide, 0f)
+        val size = axisSize()
+        when {
+            slide == 0f || style.turnMode == Prefs.TURN_NONE -> drawPage(canvas, cur, 0f)
+            t == null -> drawPage(canvas, cur, slide)   // rubber band at either end of the book
+            style.turnMode == Prefs.TURN_COVER -> {
+                // The upper sheet moves; the one below stays still.
+                if (dragDir > 0) {
+                    drawPage(canvas, t, 0f)
+                    drawPage(canvas, cur, slide)
+                    drawEdgeShadow(canvas, slide + size)
+                } else {
+                    drawPage(canvas, cur, 0f)
+                    drawPage(canvas, t, slide - size)
+                    drawEdgeShadow(canvas, slide)
+                }
             }
-        } else {
-            drawPage(canvas, cur, if (vertical) 0f else slide, if (vertical) slide else 0f)
+            else -> {
+                drawPage(canvas, t, slide + if (dragDir > 0) size else -size)
+                drawPage(canvas, cur, slide)
+            }
         }
+    }
+
+    private fun drawEdgeShadow(canvas: Canvas, edge: Float) {
+        val w = (14 * density).toInt()
+        edgeShadow.setBounds(edge.toInt(), 0, edge.toInt() + w, height)
+        edgeShadow.draw(canvas)
     }
 
     /**
@@ -313,62 +395,111 @@ class ReaderView(context: Context) : View(context) {
         autoLast = now
         if (autoProgress >= 1f) {
             if (next == null) {
-                drawPage(canvas, cur, 0f, 0f)
+                drawPage(canvas, cur, 0f)
                 stopAuto()
                 post { onAutoFinished?.invoke() }
                 return
             }
             autoProgress = 0f
             commit(next, false)
-            drawPage(canvas, next, 0f, 0f)
+            drawPage(canvas, next, 0f)
         } else {
-            drawPage(canvas, cur, 0f, 0f)
+            drawPage(canvas, cur, 0f)
             if (next != null) {
                 val y = autoProgress * height
                 canvas.save()
                 canvas.clipRect(0f, 0f, width.toFloat(), y)
-                drawPage(canvas, next, 0f, 0f)
+                drawPage(canvas, next, 0f)
                 canvas.restore()
                 canvas.drawRect(0f, y - density, width.toFloat(), y, linePaint)
+                sweepShadow.setBounds(0, y.toInt(), width, y.toInt() + (8 * density).toInt())
+                sweepShadow.draw(canvas)
             }
         }
         postInvalidateDelayed(33)
     }
 
-    private fun drawPage(canvas: Canvas, ref: PageRef, dx: Float, dy: Float) {
+    /** Draws one page displaced by [shift] pixels along the turn axis. */
+    private fun drawPage(canvas: Canvas, ref: PageRef, shift: Float) {
         val cl = layoutFor(ref.chapter) ?: return
         val src = source ?: return
         val layout = cl.layout
         val first = cl.firstLines[ref.page]
         val last = cl.firstLines[ref.page + 1] - 1
-        val left = safeLeft + margin
-        val w = contentWidth().toFloat()
 
         canvas.save()
-        canvas.translate(dx, dy)
+        if (vertical) canvas.translate(0f, shift) else canvas.translate(shift, 0f)
         canvas.clipRect(0, 0, width, height)
-        canvas.drawColor(background)
+        canvas.drawColor(style.background)
 
-        val infoLeft = safeLeft + maxOf(margin, 12 * density)
-        val infoWidth = width - safeRight - maxOf(margin, 12 * density) - infoLeft
-        val page = "${ref.page + 1}/${cl.pageCount}"
-        val pageWidth = infoPaint.measureText(page)
-        val title = TextUtils.ellipsize(src.chapterTitle(ref.chapter), infoPaint, infoWidth, TextUtils.TruncateAt.END)
-        canvas.drawText(title, 0, title.length, infoLeft, safeTop + infoHeight * 0.7f, infoPaint)
+        // Running header and footer.
+        val infoLeft = safeLeft + maxOf(style.marginPx, 14 * density)
+        val infoRight = width - safeRight - maxOf(style.marginPx, 14 * density)
+        val title = TextUtils.ellipsize(src.chapterTitle(ref.chapter), infoPaint, infoRight - infoLeft, TextUtils.TruncateAt.END)
+        infoPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText(title, 0, title.length, infoLeft, safeTop + infoHeight * 0.72f, infoPaint)
+        val bottomBase = height - safeBottom - infoHeight * 0.42f
+        canvas.drawText(clock.format(Date()), infoLeft, bottomBase, infoPaint)
         val percent = "%.1f%%".format(100f * (ref.chapter + (ref.page + 1f) / cl.pageCount) / src.chapterCount)
-        val bottomBase = height - safeBottom - infoHeight * 0.4f
-        canvas.drawText(percent, infoLeft, bottomBase, infoPaint)
-        canvas.drawText(page, infoLeft + infoWidth - pageWidth, bottomBase, infoPaint)
+        infoPaint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("${ref.page + 1}/${cl.pageCount}    $percent", infoRight, bottomBase, infoPaint)
 
-        canvas.translate(left, contentTop())
-        canvas.clipRect(0f, 0f, w, (layout.getLineBottom(last) - layout.getLineTop(first)).toFloat())
-        canvas.translate(0f, -layout.getLineTop(first).toFloat())
-        if (ref.chapter == chapter && highlightEnd > highlightStart && highlightStart >= 0) {
-            layout.getSelectionPath(highlightStart, minOf(highlightEnd, cl.text.length), path)
-            canvas.drawPath(path, highlightPaint)
+        canvas.translate(contentLeft(), contentTop() - layout.getLineTop(first))
+        val w = contentWidth().toFloat()
+        for (line in first..last) {
+            val start = layout.getLineStart(line)
+            val end = layout.getLineVisibleEnd(line)
+            if (end <= start) continue
+            val baseline = layout.getLineBaseline(line).toFloat()
+            if (start < cl.titleLength) {
+                // The title keeps its spans, so let the layout draw just these lines.
+                canvas.save()
+                canvas.clipRect(0f, layout.getLineTop(line) - 8 * density, w, layout.getLineBottom(line).toFloat())
+                layout.draw(canvas)
+                canvas.restore()
+                continue
+            }
+            justify(cl.text, start, end, layout.getLineEnd(line), w)
+            if (ref.chapter == chapter && highlightEnd > start && highlightStart < end) {
+                val a = maxOf(highlightStart, start)
+                val b = minOf(highlightEnd, end)
+                val x0 = textPaint.measureText(cl.text, start, a)
+                val x1 = x0 + textPaint.measureText(cl.text, a, b)
+                rect.set(x0 - 2 * density, baseline + textPaint.ascent() - density, x1 + 2 * density, baseline + textPaint.descent() + density)
+                canvas.drawRoundRect(rect, 4 * density, 4 * density, highlightPaint)
+            }
+            canvas.drawText(cl.text, start, end, 0f, baseline, textPaint)
         }
-        layout.draw(canvas)
+        textPaint.letterSpacing = 0f
+        if (Build.VERSION.SDK_INT >= 29) textPaint.wordSpacing = 0f
         canvas.restore()
+    }
+
+    /**
+     * Sets up [textPaint] so that drawing text[start, end) fills [width] exactly. Chinese lines are
+     * spread between characters, Latin lines between words; a paragraph's last line is left alone.
+     */
+    private fun justify(text: CharSequence, start: Int, end: Int, lineEnd: Int, width: Float) {
+        textPaint.letterSpacing = 0f
+        if (Build.VERSION.SDK_INT >= 29) textPaint.wordSpacing = 0f
+        val paragraphEnd = lineEnd >= text.length || text[lineEnd - 1] == '\n'
+        val count = end - start
+        if (paragraphEnd || count < 2) return
+        val extra = width - textPaint.measureText(text, start, end)
+        if (extra <= 0.5f) return
+        var cjk = 0
+        var spaces = 0
+        for (i in start until end) {
+            val c = text[i]
+            if (c == ' ') spaces++ else if (c.code >= 0x2E80) cjk++
+        }
+        if (cjk * 2 >= count) {
+            val perGap = extra / (count - 1)
+            if (perGap <= textPaint.textSize * 0.3f) textPaint.letterSpacing = perGap / textPaint.textSize
+        } else if (spaces > 0 && Build.VERSION.SDK_INT >= 29) {
+            val perSpace = extra / spaces
+            if (perSpace <= textPaint.textSize) textPaint.wordSpacing = perSpace
+        }
     }
 
     // ---- touch ----------------------------------------------------------------------------
@@ -436,8 +567,8 @@ class ReaderView(context: Context) : View(context) {
 
     private fun animateSlide(end: Float, commitTarget: Boolean) {
         val a = ValueAnimator.ofFloat(slide, end)
-        a.duration = 180
-        a.interpolator = DecelerateInterpolator()
+        a.duration = if (style.turnMode == Prefs.TURN_NONE) 0 else 220
+        a.interpolator = DecelerateInterpolator(1.6f)
         a.addUpdateListener {
             slide = it.animatedValue as Float
             invalidate()
@@ -457,10 +588,5 @@ class ReaderView(context: Context) : View(context) {
 
     private fun finishAnimation() {
         animator?.end()
-    }
-
-    override fun onDetachedFromWindow() {
-        animator?.cancel()
-        super.onDetachedFromWindow()
     }
 }

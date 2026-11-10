@@ -150,7 +150,7 @@ class ReaderTest {
     }
 
     @Test fun verticalModeAndVolumeKeys() {
-        Prefs(app).vertical = true
+        Prefs(app).turnMode = Prefs.TURN_VERTICAL
         val a = launch().get()
         val v = readerView(a)
         // Horizontal swipes do nothing in vertical mode; swiping up turns the page.
@@ -199,7 +199,7 @@ class ReaderTest {
             }
             return true
         }
-        val infoBand = 120   // header shows the same chapter title on both pages; skip to body text
+        val infoBand = 130   // header shows the same chapter title on both pages; skip to body text
         assertTrue("top part should show the next page", rowsEqual(mid, page2, infoBand, line - 30))
         assertTrue("bottom part should still show the current page", rowsEqual(mid, page1, line + 30, mid.height - 150))
         assertFalse("pages must differ for this check to mean anything", rowsEqual(page1, page2, infoBand, line - 30))

@@ -9,7 +9,8 @@ import java.nio.charset.CodingErrorAction
 import java.util.zip.ZipInputStream
 
 data class ParsedChapter(val title: String, val text: String)
-data class ParsedBook(val title: String, val chapters: List<ParsedChapter>)
+/** [cover] is the encoded cover image of an EPUB, if it has one. */
+class ParsedBook(val title: String, val chapters: List<ParsedChapter>, val cover: ByteArray? = null)
 
 class BookFormatException(message: String) : Exception(message)
 
@@ -29,7 +30,7 @@ object BookParser {
         }
         val chapters = book.chapters.filter { it.text.isNotBlank() }.flatMap(::splitOversized)
         if (chapters.isEmpty()) throw BookFormatException("文件中没有可阅读的文字")
-        return ParsedBook(book.title.ifBlank { base }, chapters)
+        return ParsedBook(book.title.ifBlank { base }, chapters, book.cover)
     }
 
     /** Joins non-empty lines into paragraphs with the conventional two-character indent. */
@@ -104,7 +105,9 @@ object TxtParser {
 /** Minimal EPUB 2/3 reader: follows the spine and keeps only the text. */
 object EpubParser {
     private const val MAX_UNPACKED = 300L * 1024 * 1024
-    private val SKIP_EXT = setOf("jpg", "jpeg", "png", "gif", "webp", "svg", "ttf", "otf", "woff", "woff2", "mp3", "mp4", "css", "js")
+    private val SKIP_EXT = setOf("svg", "ttf", "otf", "woff", "woff2", "mp3", "mp4", "css", "js")
+    private val IMAGE_EXT = setOf("jpg", "jpeg", "png", "gif", "webp")
+    private const val MAX_IMAGE = 8 * 1024 * 1024
     private val ATTR = Regex("([\\w:.-]+)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')")
 
     fun parse(fallbackTitle: String, bytes: ByteArray): ParsedBook {
@@ -166,7 +169,12 @@ object EpubParser {
             if (lines.first() == name) lines.removeAt(0)
             if (lines.isNotEmpty()) chapters.add(ParsedChapter(name, BookParser.paragraphs(lines)))
         }
-        return ParsedBook(title, chapters)
+        // EPUB 3 marks the cover in the manifest; EPUB 2 names it in a <meta name="cover">.
+        val coverItem = manifest.values.firstOrNull { "cover-image" in it.props.split(' ') }
+            ?: Regex("(?is)<(?:\\w+:)?meta\\b([^>]*)>").findAll(opf).map { attrs(it.groupValues[1]) }
+                .firstOrNull { it["name"] == "cover" }?.get("content")?.let { manifest[it] }
+        val cover = coverItem?.takeIf { it.type.startsWith("image/") && it.type != "image/svg+xml" }?.let { files[it.path] }
+        return ParsedBook(title, chapters, cover)
     }
 
     private fun unzip(bytes: ByteArray): Map<String, ByteArray> {
@@ -176,8 +184,11 @@ object EpubParser {
             ZipInputStream(ByteArrayInputStream(bytes)).use { zin ->
                 while (true) {
                     val e = zin.nextEntry ?: break
-                    if (e.isDirectory || e.name.substringAfterLast('.', "").lowercase() in SKIP_EXT) continue
+                    val ext = e.name.substringAfterLast('.', "").lowercase()
+                    if (e.isDirectory || ext in SKIP_EXT) continue
                     val data = zin.readBytes()
+                    // Images are only kept as cover candidates.
+                    if (ext in IMAGE_EXT && data.size > MAX_IMAGE) continue
                     total += data.size
                     if (total > MAX_UNPACKED) throw BookFormatException("EPUB 文件过大")
                     out[e.name] = data
