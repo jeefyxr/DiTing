@@ -16,8 +16,14 @@ interface Speaker {
      */
     fun speak(text: String, pauseMs: Int, onDone: (ok: Boolean) -> Unit)
 
-    /** Hint that [text] will be spoken next, so it can be synthesized ahead of time. */
+    /** Hint that [text] will be spoken soon, so it can be synthesized ahead of time. */
     fun prefetch(text: String) {}
+
+    /** How many sentences ahead are worth passing to [prefetch]. */
+    val lookAhead: Int get() = 0
+
+    /** Why the last [speak] reported failure, if a reason is known. */
+    val lastError: String? get() = null
 
     fun stop()
     fun release()

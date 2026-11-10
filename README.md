@@ -1,6 +1,6 @@
 # 谛读 (DiDu)
 
-一个只保留必要功能的 Android 电子书阅读器。安装包约 0.1MB；只在你主动下载离线语音时联网。
+一个只保留必要功能的 Android 电子书阅读器。安装包约 0.1MB；只在你主动下载离线语音或使用在线语音时联网。
 
 ## 功能
 
@@ -40,6 +40,14 @@ sherpa-onnx 2.0.1 的 arm64 版本。`com/k2fsa/sherpa/onnx/Tts.kt` 是该版本
 女声、男声分别是模型里的 2 号和 1 号说话人（见 `SherpaModel.kt`）。这个模型比系统语音慢得多：
 在 x86 上 4 线程合成耗时约为音频时长的 0.2 倍，手机上会更高，较旧的手机可能出现句间停顿。
 
+## 在线语音
+
+“听”面板的语音里还有一项“在线”：用自建服务上的 CosyVoice 合成。在“在线语音”一行点“设置”，填服务地址和
+访问令牌，再从服务器的音色列表里选一个。令牌只保存在手机上，不在代码里。
+
+服务端按任务排队合成，在 CPU 通道上比播放慢（实测约 2 倍），冷启动要几十秒，所以应用会提前请求后面
+六句，并把结果放进配音缓存：第一次听会有等待，听过的部分可以离线重听。
+
 ## 构建
 
 需要 JDK 17+ 和 Android SDK（platform 36、build-tools 36.0.0）。
@@ -57,7 +65,8 @@ APK 输出在 `app/build/outputs/apk/release/app-release.apk`。release 版本�
 
 测试包含对真实界面的渲染测试（Robolectric）。`GalleryTest` 会把每个页面在明暗两种配色下
 渲染到 `app/build/gallery/`；设置环境变量 `DITING_SAMPLE_EPUB` 可以用一本真实的 EPUB 作为内容。
-设置 `DITING_NETWORK_TEST=1` 会真实执行一次离线语音的自动下载。
+设置 `DITING_NETWORK_TEST=1` 会真实执行一次离线语音的自动下载；
+设置 `DITING_ONLINE_TOKEN` 会真实调用一次在线语音服务。
 
 ## 已知限制
 

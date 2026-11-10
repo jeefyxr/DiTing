@@ -30,6 +30,7 @@ import io.github.jeefyxr.diting.data.BookMeta
 import io.github.jeefyxr.diting.data.BookStore
 import io.github.jeefyxr.diting.tts.AudioCache
 import io.github.jeefyxr.diting.tts.OfflineVoice
+import io.github.jeefyxr.diting.tts.OnlineVoice
 import io.github.jeefyxr.diting.tts.Speaker
 import io.github.jeefyxr.diting.tts.SystemSpeaker
 import io.github.jeefyxr.diting.ui.IconDrawable
@@ -257,7 +258,11 @@ class ReaderActivity : Activity(), ReaderView.Source {
 
     // ---- speech ---------------------------------------------------------------------------
 
-    private fun offlineVoice() = prefs.voice != Prefs.VOICE_SYSTEM && voices.isInstalled()
+    private fun offlineVoice() = (prefs.voice == Prefs.VOICE_FEMALE || prefs.voice == Prefs.VOICE_MALE) && voices.isInstalled()
+    private fun onlineVoice() = prefs.voice == Prefs.VOICE_ONLINE && prefs.onlineToken.isNotEmpty() && prefs.onlineVoice.isNotEmpty()
+
+    /** The voice actually in use; a choice whose prerequisites are missing falls back to the system voice. */
+    private fun activeVoice() = if (offlineVoice() || onlineVoice()) prefs.voice else Prefs.VOICE_SYSTEM
 
     /**
      * Starts reading aloud: from [at] if given; else (with [resume]) from where listening last
@@ -267,10 +272,10 @@ class ReaderActivity : Activity(), ReaderView.Source {
         stopAuto()
         stopSpeech()
         val rate = prefs.rateTenths / 10f
-        speaker = if (offlineVoice()) {
-            voices.speaker(prefs.voice == Prefs.VOICE_MALE, rate, audioCache)
-        } else {
-            SystemSpeaker(this, rate)
+        speaker = when {
+            onlineVoice() -> OnlineVoice(prefs.onlineUrl, prefs.onlineToken).speaker(prefs.onlineVoice, rate, audioCache)
+            offlineVoice() -> voices.speaker(prefs.voice == Prefs.VOICE_MALE, rate, audioCache)
+            else -> SystemSpeaker(this, rate)
         }
         speaking = true
         speechPos = at ?: (if (resume) resumePoint() else null) ?: view.offset
@@ -358,7 +363,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
             // Synthesize a few sentences ahead so a slow voice does not stall between sentences.
             var ahead = end
             var queued = 0
-            while (queued < LOOK_AHEAD && ahead < text.length) {
+            while (queued < (speaker?.lookAhead ?: 0) && ahead < text.length) {
                 val aheadEnd = Sentences.end(text, ahead)
                 val next = text.substring(ahead, aheadEnd)
                 if (Sentences.isSpeakable(next)) { speaker?.prefetch(next.trim()); queued++ }
@@ -372,9 +377,14 @@ class ReaderActivity : Activity(), ReaderView.Source {
                     speechPos = end
                     speakNext()
                 } else {
-                    val offline = offlineVoice()
+                    val reason = speaker?.lastError
+                    val fallback = when (activeVoice()) {
+                        Prefs.VOICE_SYSTEM -> "系统语音引擎不可用或不支持中文，可改用其他语音"
+                        Prefs.VOICE_ONLINE -> "在线语音合成失败"
+                        else -> "离线语音合成失败"
+                    }
                     stopSpeech()
-                    toast(if (offline) "离线语音合成失败" else "系统语音引擎不可用或不支持中文，可改用离线语音")
+                    Toast.makeText(this, reason ?: fallback, Toast.LENGTH_LONG).show()
                 }
             }
             return
@@ -382,12 +392,82 @@ class ReaderActivity : Activity(), ReaderView.Source {
     }
 
     private fun chooseVoice(voice: Int) {
-        if (voice != Prefs.VOICE_SYSTEM && !voices.isInstalled()) {
+        if ((voice == Prefs.VOICE_FEMALE || voice == Prefs.VOICE_MALE) && !voices.isInstalled()) {
             promptOfflineSetup()
+            return
+        }
+        if (voice == Prefs.VOICE_ONLINE && (prefs.onlineToken.isEmpty() || prefs.onlineVoice.isEmpty())) {
+            promptOnlineSetup()
             return
         }
         prefs.voice = voice
         if (speaking) startSpeech(at = speechPos)
+    }
+
+    /** Asks for the online service's address and token, then lets the user pick one of its voices. */
+    private fun promptOnlineSetup() {
+        val pad = dp(24)
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(pad, dp(8), pad, 0)
+        fun field(hint: String, value: String, secret: Boolean) = android.widget.EditText(this).apply {
+            this.hint = hint
+            setText(value)
+            setSingleLine()
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                (if (secret) android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD else android.text.InputType.TYPE_TEXT_VARIATION_URI)
+            box.addView(this, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        }
+        val url = field("服务地址", prefs.onlineUrl, false)
+        val token = field("访问令牌", prefs.onlineToken, true)
+        AlertDialog.Builder(this, dialogTheme())
+            .setTitle("在线语音")
+            .setMessage("使用自建服务上的 CosyVoice 朗读。朗读时需要联网；合成过的句子会进入配音缓存，可以离线重听。")
+            .setView(box)
+            .setPositiveButton("选择音色") { _, _ ->
+                prefs.onlineUrl = url.text.toString().ifBlank { Prefs.DEFAULT_ONLINE_URL }
+                prefs.onlineToken = token.text.toString()
+                pickOnlineVoice()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun pickOnlineVoice() {
+        if (prefs.onlineToken.isEmpty()) {
+            toast("需要先填写访问令牌")
+            return
+        }
+        val wait = AlertDialog.Builder(this, dialogTheme()).setMessage("正在读取音色列表…").setCancelable(false).show()
+        val service = OnlineVoice(prefs.onlineUrl, prefs.onlineToken)
+        thread {
+            val result = try { Result.success(service.voices()) } catch (e: Exception) { Result.failure(e) }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                wait.dismiss()
+                val list = result.getOrNull()
+                if (list.isNullOrEmpty()) {
+                    AlertDialog.Builder(this, dialogTheme()).setTitle("读取失败")
+                        .setMessage(result.exceptionOrNull()?.message ?: "服务器上没有可用的音色")
+                        .setPositiveButton("重新填写") { _, _ -> promptOnlineSetup() }
+                        .setNegativeButton("关闭", null).show()
+                    return@runOnUiThread
+                }
+                val current = list.indexOfFirst { it.id == prefs.onlineVoice }
+                AlertDialog.Builder(this, dialogTheme())
+                    .setTitle("选择音色")
+                    .setSingleChoiceItems(list.map { it.name }.toTypedArray(), current) { dialog, i ->
+                        dialog.dismiss()
+                        prefs.onlineVoice = list[i].id
+                        prefs.onlineVoiceName = list[i].name
+                        prefs.voice = Prefs.VOICE_ONLINE
+                        ui.refresh()
+                        if (speaking) startSpeech(at = speechPos)
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+        }
     }
 
     private fun dialogTheme() =
@@ -826,9 +906,24 @@ class ReaderActivity : Activity(), ReaderView.Source {
             col.addView(r)
         }
         val offlineSupported = OfflineVoice.supported(Build.SUPPORTED_ABIS)
-        if (offlineSupported) {
-            row("语音", ui.chips(listOf("系统", "女声", "男声"), { if (offlineVoice()) prefs.voice else Prefs.VOICE_SYSTEM }) { chooseVoice(it) })
-        }
+        // Which voices are offered depends on the device; map chip positions to voice constants.
+        val choices = listOf(Prefs.VOICE_SYSTEM to "系统") +
+            (if (offlineSupported) listOf(Prefs.VOICE_FEMALE to "女声", Prefs.VOICE_MALE to "男声") else emptyList()) +
+            listOf(Prefs.VOICE_ONLINE to "在线")
+        row("语音", ui.chips(choices.map { it.second }, { choices.indexOfFirst { it.first == activeVoice() } }) { chooseVoice(choices[it].first) })
+        row("在线语音", LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ui.button("设置") { promptOnlineSetup() })
+            val state = ui.singleLine(ui.text("", 12.5f, ui.p.faint))
+            ui.refreshers.add {
+                state.text = when {
+                    prefs.onlineToken.isEmpty() -> "需要服务地址和访问令牌"
+                    prefs.onlineVoice.isEmpty() -> "还没有选择音色"
+                    else -> prefs.onlineVoiceName.ifEmpty { prefs.onlineVoice }
+                }
+            }
+            addView(state, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply { marginStart = dp(4); marginEnd = dp(24) })
+        })
         val rate = LinearLayout(this)
         rate.gravity = Gravity.CENTER_VERTICAL
         rate.addView(ui.slider(20, { prefs.rateTenths - 5 }) { value, done ->
@@ -855,7 +950,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
             }
             addView(state, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { marginStart = dp(4) })
         })
-        if (offlineSupported) {
+        run {
             row("配音缓存", ui.chips(Prefs.CACHE_SIZES_MB.map { "${it}M" }, { Prefs.CACHE_SIZES_MB.indexOf(prefs.cacheMb) }) {
                 prefs.cacheMb = Prefs.CACHE_SIZES_MB[it]
                 audioCache.limitBytes = prefs.cacheMb * 1048576L
@@ -942,7 +1037,6 @@ class ReaderActivity : Activity(), ReaderView.Source {
         private const val SETTINGS = 2
         private const val TOC = 3
         private const val LISTEN = 4
-        private const val LOOK_AHEAD = 3
         private const val SENTENCE_PAUSE_MS = 180
         private const val PARAGRAPH_PAUSE_MS = 480
     }

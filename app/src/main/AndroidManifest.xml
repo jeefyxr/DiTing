@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Used for one thing only: downloading the optional offline voice when the user asks for it. -->
+    <!-- Used only when the user asks for it: to download the offline voice, or to read with the online voice. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Needed on Android 11+ to find the phone's text-to-speech engine. -->

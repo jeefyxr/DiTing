@@ -66,13 +66,31 @@ class Prefs(context: Context) {
         set(v) = put("autoSeconds", v.coerceIn(5, 120))
 
     var voice: Int
-        get() = int("voice", VOICE_SYSTEM, 0..2)
+        get() = int("voice", VOICE_SYSTEM, 0..3)
         set(v) = put("voice", v)
 
     /** Speech rate in tenths (10 = normal). */
     var rateTenths: Int
         get() = int("rate", 10, 5..25)
         set(v) = put("rate", v.coerceIn(5, 25))
+
+    /** Address of the online speech service, up to and including its API prefix. */
+    var onlineUrl: String
+        get() = sp.getString("onlineUrl", null) ?: DEFAULT_ONLINE_URL
+        set(v) = sp.edit().putString("onlineUrl", v.trim()).apply()
+
+    /** Access token of the online speech service. Entered by the user; never shipped with the app. */
+    var onlineToken: String
+        get() = sp.getString("onlineToken", null).orEmpty()
+        set(v) = sp.edit().putString("onlineToken", v.trim()).apply()
+
+    var onlineVoice: String
+        get() = sp.getString("onlineVoice", null).orEmpty()
+        set(v) = sp.edit().putString("onlineVoice", v).apply()
+
+    var onlineVoiceName: String
+        get() = sp.getString("onlineVoiceName", null).orEmpty()
+        set(v) = sp.edit().putString("onlineVoiceName", v).apply()
 
     /** Upper bound of the spoken-sentence cache in megabytes. */
     var cacheMb: Int
@@ -112,6 +130,8 @@ class Prefs(context: Context) {
         const val VOICE_SYSTEM = 0
         const val VOICE_FEMALE = 1
         const val VOICE_MALE = 2
+        const val VOICE_ONLINE = 3
+        const val DEFAULT_ONLINE_URL = "https://tools.jeefy.top/api"
 
         const val TURN_SLIDE = 0
         const val TURN_COVER = 1
