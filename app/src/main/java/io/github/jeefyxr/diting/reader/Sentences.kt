@@ -45,5 +45,12 @@ object Sentences {
         return previous
     }
 
+    /**
+     * The offset to resume listening at: the [saved] chapter and offset, but only while that spot
+     * is on the page now shown ([pageStart] until [pageEnd] of [chapter]); otherwise null.
+     */
+    fun resumeOffset(saved: Pair<Int, Int>?, chapter: Int, pageStart: Int, pageEnd: Int): Int? =
+        saved?.takeIf { it.first == chapter && it.second >= pageStart && it.second < pageEnd }?.second
+
     fun isSpeakable(s: CharSequence) = s.any { it.isLetterOrDigit() }
 }

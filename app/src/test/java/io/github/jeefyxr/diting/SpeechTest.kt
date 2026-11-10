@@ -79,6 +79,17 @@ class SpeechTest {
         }
     }
 
+    @Test fun listeningResumesOnlyOnThePageWhereItStopped() {
+        val saved = 3 to 250
+        assertEquals(250, Sentences.resumeOffset(saved, chapter = 3, pageStart = 200, pageEnd = 400))
+        assertEquals(250, Sentences.resumeOffset(saved, 3, 250, 400))
+        // The reader turned the page, or went to another chapter, by hand: start from what they see.
+        assertEquals(null, Sentences.resumeOffset(saved, 3, 400, 600))
+        assertEquals(null, Sentences.resumeOffset(saved, 3, 0, 250))
+        assertEquals(null, Sentences.resumeOffset(saved, 4, 200, 400))
+        assertEquals(null, Sentences.resumeOffset(null, 3, 200, 400))
+    }
+
     @Test fun previousSentence() {
         val text = "第一句。第二句！\n……\n　　第三句？第四句"
         val starts = listOf(0, 4, text.indexOf("　　第三句"), text.indexOf("第四句"))

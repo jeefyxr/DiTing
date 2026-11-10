@@ -260,8 +260,8 @@ class ReaderActivity : Activity(), ReaderView.Source {
     private fun offlineVoice() = prefs.voice != Prefs.VOICE_SYSTEM && voices.isInstalled()
 
     /**
-     * Starts reading aloud: from [at] if given, else (with [resume]) from where listening last
-     * stopped in this book, else from the top of the current page.
+     * Starts reading aloud: from [at] if given; else (with [resume]) from where listening last
+     * stopped, provided that spot is still on the page being shown; else from the top of the page.
      */
     private fun startSpeech(at: Int? = null, resume: Boolean = false) {
         stopAuto()
@@ -273,16 +273,7 @@ class ReaderActivity : Activity(), ReaderView.Source {
             SystemSpeaker(this, rate)
         }
         speaking = true
-        val saved = prefs.listenPosition(meta.id)?.takeIf { it.first in 0 until chapterCount }
-        speechPos = when {
-            at != null -> at
-            resume && saved != null -> {
-                val onThisPage = saved.first == view.chapter && saved.second >= view.offset && saved.second < view.pageEndOffset()
-                if (!onThisPage) view.open(saved.first, saved.second)
-                saved.second.coerceAtMost(view.chapterText().length)
-            }
-            else -> view.offset
-        }
+        speechPos = at ?: (if (resume) resumePoint() else null) ?: view.offset
         refresh()
         speakNext()
     }
@@ -308,17 +299,24 @@ class ReaderActivity : Activity(), ReaderView.Source {
         speakNext()
     }
 
+    /**
+     * Where listening last stopped, if that is on the page being shown. Listening turns the pages
+     * itself, so when the reader has since turned to another page by hand this is null and
+     * listening starts from the page in front of them instead.
+     */
+    private fun resumePoint(): Int? =
+        Sentences.resumeOffset(prefs.listenPosition(meta.id), view.chapter, view.offset, view.pageEndOffset())
+
     private fun updateListenStatus() {
         val label = listenStatus ?: return
-        val saved = prefs.listenPosition(meta.id)?.takeIf { it.first in 0 until chapterCount }
         label.text = when {
             speaking -> {
                 val text = view.chapterText()
                 val start = speechPos.coerceIn(0, text.length)
                 text.substring(start, Sentences.end(text, start).coerceAtMost(text.length)).trim()
             }
-            saved != null -> "上次听到 · ${chapterTitle(saved.first)}"
-            else -> "还没有听过这本书，将从当前页开始"
+            resumePoint() != null -> "将从上次听到的位置继续"
+            else -> "将从当前页开始"
         }
     }
 
